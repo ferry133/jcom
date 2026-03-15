@@ -82,7 +82,7 @@ spec:
         # Must be a UUID and not changed during the lifetime of the installation.
         id: "96878671-71E2-4C0D-B166-2F2B5D883BFC"
         # -- Name is the human-readable name of the account.
-        name: kmp-omni
+        name: jcom
         # UserPilot contains UserPilot-related configuration.
         #userPilot:
         # AppToken is the UserPilot application token.
