@@ -1,0 +1,14 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: omni-nfs
+  annotations:
+    nfs.io/storage-path: "k8somni" # not required, depending on whether this annotation was shown in the storage class description
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ds2-homedirect
+  resources:
+    requests:
+      storage: 16Gi
