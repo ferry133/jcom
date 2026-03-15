@@ -463,7 +463,7 @@ spec:
 
     # -- Environment variables to pass to Omni.
     env: []
-#      TZ: "Asia/Taipei"
+    #  TZ: "Asia/Taipei"
 
     # -- envFrom to pass to Omni.
     envFrom: []
