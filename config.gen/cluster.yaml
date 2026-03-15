@@ -21,7 +21,7 @@ node_cidr: 10.9.8.0/24
 
 # -- The IP address of the Kube API.
 #    (REQUIRED) / (NOTE: Choose an unused IP in node_cidr)
-cluster_api_addr: 10.9.8.10
+cluster_api_addr: 10.9.8.2
 
 # -- Additional SANs to add to the Kube API cert. This is useful if you want to call the Kube API by hostname rather than IP
 #    (OPTIONAL) / (e.g. ["mycluster.example.com"])
@@ -37,11 +37,11 @@ cluster_api_addr: 10.9.8.10
 
 # -- The Load balancer IP for k8s_gateway, this provides DNS to all your gateways when split DNS is configured on your internal DNS server (Dnsmasq, Pi-hole, etc)
 #    (REQUIRED) / (NOTE: Choose an unused IP in node_cidr)
-cluster_dns_gateway_addr: 10.9.8.11
+cluster_dns_gateway_addr: 10.9.8.3
 
 # -- The Load balancer IP for the internal gateway
 #    (REQUIRED) / (NOTE: Choose an unused IP in node_cidr)
-cluster_gateway_addr: 10.9.8.12
+cluster_gateway_addr: 10.9.8.4
 
 # -- GitHub repository
 #    (REQUIRED) / (e.g. "onedr0p/cluster-template")
@@ -65,7 +65,7 @@ cloudflare_token: cgh_b8Gyv0BDYSK3LtGWFMzyWzHbL7hIinxJfn9M
 
 # -- The Load balancer IP for the external gateway
 #    (REQUIRED) / (NOTE: Choose an unused IP in node_cidr)
-cloudflare_gateway_addr: 10.9.8.13
+cloudflare_gateway_addr: 10.9.8.5
 
 # -- The load balancer mode for cilium.
 #    (OPTIONAL) / (DEFAULT: "dsr") / (NOTE: accepted values are 'dsr' or 'snat') / (REF: https://docs.cilium.io/en/stable/network/kubernetes/kubeproxy-free/)
