@@ -462,8 +462,8 @@ spec:
           #k8sAuthMountPath: ""
 
     # -- Environment variables to pass to Omni.
-    env:
-      TZ: "Asia/Taipei"
+    env: []
+#      TZ: "Asia/Taipei"
 
     # -- envFrom to pass to Omni.
     envFrom: []
