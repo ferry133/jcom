@@ -4,10 +4,21 @@ kind: HelmRelease
 metadata:
   name: omni
 spec:
-  chartRef:
-    kind: OCIRepository
-    name: omni
-  interval: 1h
+#  chartRef:
+#    kind: OCIRepository
+#    name: omni
+#  interval: 1h
+  interval: 15m
+  timeout: 5m
+  chart:
+    spec:
+      chart: omni
+      version: '2.1.1'
+      sourceRef:
+        kind: HelmRepository
+        name: my-helm-repo
+        namespace: omni
+      interval: 5m
   values:
     # -- Provide a name in place of `"omni"`.
     nameOverride: ""
