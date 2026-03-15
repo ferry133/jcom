@@ -1,0 +1,26 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: first-nfs-subdir-external-provisioner
+  namespace: storage
+spec:
+  interval: 15m
+  timeout: 5m
+  chart:
+    spec:
+      chart: nfs-subdir-external-provisioner
+      sourceRef:
+        kind: HelmRepository
+        name: nfs-provisioner
+        namespace: storage
+      interval: 5m
+  values:
+    storageClass:
+      name: ds2-homedirect
+      provisionerName: "k8s-sigs.io/first-nfs-subdir-external-provisioner"
+      pathPattern: "$${.PVC.namespace}-$${.PVC.annotations.nfs.io/storage-path}" # "${.PVC.namespace}-${.PVC.name}"
+    nfs:
+      server: "10.9.1.12"
+      path: "/volume2/homedirect"
+
