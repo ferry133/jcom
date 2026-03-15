@@ -18,8 +18,8 @@ cniConfig:
   name: none
 
 nodes:
-  - hostname: "jg-0-0"
-    ipAddress: "10.9.8.20"
+  - hostname: "jcom-0-0"
+    ipAddress: "10.9.8.6"
     installDisk: "/dev/nvme0n1"
     machineSpec:
       secureboot: false
@@ -30,7 +30,7 @@ nodes:
           hardwareAddr: "48:21:0b:6f:de:3a"
         dhcp: false
         addresses:
-          - "10.9.8.20/24"
+          - "10.9.8.6/24"
         routes:
           - gateway: "10.9.8.1"
             network: 0.0.0.0/0
