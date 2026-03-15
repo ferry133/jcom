@@ -6,4 +6,20 @@ resources:
 #  - ./ocirepository.yaml
   - ./helmrepository.yaml
   - ./helmrelease.yaml
+  - ./certificate.yaml
+  - ./ingress.yaml
+#  - ./grpcroute.yaml
   - ./httproute.yaml
+
+
+##############################
+# 20260308 Larry: Go ingress solution. Give up the omni-siderolink on cloudflare tunnel, because of the following limitations:
+#
+# https://developers.cloudflare.com/network/grpc-connections/
+#
+# LIMITATIONS
+# ....
+# Cloudflare Tunnel supports gRPC traffic via "private subnet routing". Public hostname deployments are not currently supported.
+#
+# under this solution, the omni-siderolink (grpc protocol) will be only accessible within the cluster, and the external access
+# will be "network is unreachable".

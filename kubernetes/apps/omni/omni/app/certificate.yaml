@@ -1,0 +1,18 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: "janncot-duckdns-org-production"
+spec:
+  dnsNames:
+    - "janncot.duckdns.org"
+    - "*.janncot.duckdns.org"
+  duration: 160h
+  issuerRef:
+    name: cert-manager-webhook-duckdns-production
+    kind: ClusterIssuer
+  privateKey:
+    algorithm: ECDSA
+  secretName: "janncot-duckdns-org-production-tls"
+  usages:
+    - digital signature

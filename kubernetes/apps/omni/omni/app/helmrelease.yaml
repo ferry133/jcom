@@ -82,7 +82,7 @@ spec:
         # Must be a UUID and not changed during the lifetime of the installation.
         id: "96878671-71E2-4C0D-B166-2F2B5D883BFC"
         # -- Name is the human-readable name of the account.
-        name: omni
+        name: kmp-omni
         # UserPilot contains UserPilot-related configuration.
         #userPilot:
         # AppToken is the UserPilot application token.
@@ -94,9 +94,10 @@ spec:
           # -- Enabled controls whether the Auth0 authentication provider is enabled.
           enabled: true
           # -- ClientID is the Auth0 client ID.
-          clientID: "v9Izvzz2Oc5IzWlAKDUteYrrD1whl3zH"
+#          clientID: "7nwdMFnIvPwdT7MNACAuoCkuC7rCaknb"   # janncot.duckdns.org
+          clientID: "y8SZnlMtSfQ5HnDHKkR1kdGG6nTeXnem"   # janncot.com
           # -- Domain is the Auth0 domain.
-          domain: "dev-iuun0sorsooqrtcg.us.auth0.com"
+          domain: "dev-s6klrnbd0umevgxf.us.auth0.com"
           # UseFormData controls whether the Auth0 provider should use form data for authentication requests.
           #useFormData: false
         # -- InitialServiceAccount contains configuration for the initial service account created when Omni is run for the first time.
@@ -252,10 +253,13 @@ spec:
       # -- Registries contains container image registries configuration.
       registries:
         # Talos is the Talos installer registry configuration.
+        talos: ghcr.io/siderolabs/installer
         #talos: ghcr.io/siderolabs/installer
         # Kubernetes is the Kubernetes container registry configuration.
+        kubernetes: ghcr.io/siderolabs/kubelet
         #kubernetes: ghcr.io/siderolabs/kubelet
         # ImageFactoryBaseURL is the base URL of the Image Factory service.
+        imageFactoryBaseURL: https://factory.talos.dev
         #imageFactoryBaseURL: https://factory.talos.dev
         # ImageFactoryPXEBaseURL is the base URL of the Image Factory PXE endpoint.
         #imageFactoryPXEBaseURL: ""
@@ -268,6 +272,7 @@ spec:
           # -- The advertised URL for the main Omni GRPC and HTTP API and Web UI.
           # MUST be specified as a full URL, including scheme (http:// or https://).
           # It MUST match the URL of the main ingress if ingress is used.
+#          advertisedURL: https://omni.janncot.duckdns.org
           advertisedURL: https://omni.janncot.com
         #      advertisedURL: https://omni.example.com
         # Endpoint is the network endpoint the service listens on. It is in the form "host:port".
@@ -303,6 +308,7 @@ spec:
           # -- The advertised URL for the Kubernetes API Proxy.
           # MUST be specified as a full URL, including scheme (https://).
           # It MUST match the URL of the kubernetes proxy ingress if ingress is used.
+#          advertisedURL: https://omni-k8s.janncot.duckdns.org
           advertisedURL: https://omni-k8s.janncot.com
         #      advertisedURL: https://kubernetes.omni.example.com
         # Endpoint is the network endpoint the Kubernetes proxy service listens on. It is in the form "host:port".
@@ -316,7 +322,9 @@ spec:
           # -- The advertised URL for the SideroLink (Machine) API.
           # MUST be specified as a full URL, including scheme (http:// or https://).
           # It MUST match the URL of the siderolink API ingress if ingress is used.
-          advertisedURL: https://omni-link.janncot.com
+          advertisedURL: https://omni-siderolink.janncot.duckdns.org
+#          advertisedURL: https://omni-siderolink.janncot.com
+#          advertisedURL: grpc://omni-siderolink.janncot.com
         #      advertisedURL: https://siderolink.omni.example.com
         # Endpoint is the network endpoint the service listens on. It is in the form "host:port".
         #endpoint: ""
@@ -343,7 +351,7 @@ spec:
             # In most setups, this is either:
             # - NodePort: Use the externally accessible IP of a node and service.wireguard.nodePort (e.g., "203.0.113.10:30180")
             # - LoadBalancer: Use the LoadBalancer's external IP and service.wireguard.port (e.g., "203.0.113.50:50180")
-            advertisedEndpoint: "1.34.181.95:50180"
+            advertisedEndpoint: "1.34.181.95:30180"
             #advertisedEndpoint: ""
             # Endpoint is the network endpoint the WireGuard interface listens on. It is in the form "ip:port" (IP address is required, not hostname).
             #endpoint: "0.0.0.0:50180"
@@ -454,8 +462,8 @@ spec:
           #k8sAuthMountPath: ""
 
     # -- Environment variables to pass to Omni.
-    env:
-      TZ: "Asia/Taipei"
+    env: []
+#      TZ: "Asia/Taipei"
 
     # -- envFrom to pass to Omni.
     envFrom: []
@@ -493,17 +501,20 @@ spec:
         # The default annotations ensure compatibility with NGINX Ingress Controller.
         # They are ignored by other ingress controllers.
         annotations:
-          nginx.ingress.kubernetes.io/backend-protocol: GRPC
-          nginx.ingress.kubernetes.io/proxy-body-size: 32m
-          nginx.ingress.kubernetes.io/service-upstream: "true"
+#          nginx.ingress.kubernetes.io/backend-protocol: http
+#          nginx.ingress.kubernetes.io/proxy-body-size: 32m
+#          nginx.ingress.kubernetes.io/service-upstream: "true"
         # -- Additional Labels
         labels: {}
         # -- Ingress Class Name
-        className: ""
+        className: "nginx"
         # -- Omni hostname
-        host: omni.example.com
+        host: omni.janncot.duckdns.org
         # -- TLS configuration
-        tls: []
+        tls:
+          - secretName: janncot-duckdns-org-production-tls
+            hosts:
+              - omni.janncot.duckdns.org
         #- secretName: omni-tls
         #  hosts:
         #    - omni.example.com
@@ -518,12 +529,15 @@ spec:
         # -- Additional Labels
         labels: {}
         # -- Ingress Class Name
-        className: ""
+        className: "nginx"
         # -- Omni Kubernetes Proxy hostname
-        host: kubernetes-kmp.janncot.com
+        host: omni-k8s.janncot.duckdns.org
         #    host: kubernetes.omni.example.com
         # -- TLS configuration
-        tls: []
+        tls:
+          - secretName: janncot-duckdns-org-production-tls
+            hosts:
+              - omni-k8s.janncot.duckdns.org
         #- secretName: omni-k8s-proxy-tls
         #  hosts:
         #    - kubernetes.omni.example.com
@@ -537,17 +551,20 @@ spec:
         # The default annotations ensure compatibility with NGINX Ingress Controller.
         # They are ignored by other ingress controllers.
         annotations:
-          nginx.ingress.kubernetes.io/backend-protocol: GRPC
-          nginx.ingress.kubernetes.io/proxy-body-size: 100m
+#          nginx.ingress.kubernetes.io/backend-protocol: GRPC
+#          nginx.ingress.kubernetes.io/proxy-body-size: 100m
         # -- Additional Labels
         labels: {}
         # -- Ingress Class Name
-        className: ""
+        className: "nginx"
         # -- Omni SideroLink Machine API hostname
-        host: siderolink-kmp.janncot.com
+        host: omni-siderolink.janncot.duckdns.org
         #    host: siderolink.omni.example.com
         # -- TLS configuration
-        tls: []
+        tls:
+          - secretName: janncot-duckdns-org-production-tls
+            hosts:
+              - omni-siderolink.janncot.duckdns.org
         #- secretName: omni-siderolink-tls
         #  hosts:
         #    - siderolink.omni.example.com
@@ -560,54 +577,68 @@ spec:
       ui:
         # -- Enable HTTPRoute for Web UI.
         enabled: false
+#        enabled: false
         # -- Additional Annotations
         annotations: {}
         # -- Additional Labels
         labels: {}
         # -- The Gateway(s) to attach this route to.
         # You MUST define at least one parentRef for the route to be active.
-        parentRefs: []
+        parentRefs:
+          - name: envoy-external
+            namespace: network
+            sectionName: https
         #- name: my-gateway
         #  namespace: my-gateway-namespace
         #  sectionName: https-listener
         # -- Omni UI hostname
         hostnames:
-          - kmp.janncot.com
+          - omni.janncot.com
       #      - omni.example.com
       # Route for the Kubernetes Proxy
       kubernetesProxy:
         # -- Enable HTTPRoute for Kubernetes Proxy.
         enabled: false
+#        enabled: false
         # -- Additional Annotations
         annotations: {}
         # -- Additional Labels
         labels: {}
         # -- The Gateway(s) to attach this route to.
         # You MUST define at least one parentRef for the route to be active.
-        parentRefs: []
+        parentRefs:
+          - name: envoy-external
+            namespace: network
+            sectionName: https
         #- name: my-gateway
         #  namespace: my-gateway-namespace
         #  sectionName: https-listener
         # -- Omni Kubernetes Proxy hostname
         hostnames:
-          - kubernetes.omni.example.com
+          - omni-k8s.janncot.com
+#          - kubernetes.omni.example.com
       # Route for the SideroLink Machine API
       siderolinkApi:
         # -- Enable GRPCRoute for SideroLink Machine API.
         enabled: false
+#        enabled: false
         # -- Additional Annotations
         annotations: {}
         # -- Additional Labels
         labels: {}
         # -- The Gateway(s) to attach this route to.
         # You MUST define at least one parentRef for the route to be active.
-        parentRefs: []
+        parentRefs:
+          - name: envoy-external
+            namespace: network
+            sectionName: http       # Note: many Gateway controllers do not yet support gRPC listeners, so this route is attached to the HTTP section of the gateway by default. Adjust according to your controller's capabilities.
         #- name: my-gateway
         #  namespace: my-gateway-namespace
         #  sectionName: https-listener
         # -- Omni SideroLink Machine API hostname
         hostnames:
-          - siderolink.omni.example.com
+          - omni-siderolink.janncot.com
+#          - siderolink.omni.example.com
 
     # Probes Configuration
     # -- Liveness probe configuration.
@@ -619,7 +650,8 @@ spec:
         path: /healthz
         port: omni
         scheme: HTTP
-      periodSeconds: 5
+      periodSeconds: 10
+#      periodSeconds: 5
       successThreshold: 1
       timeoutSeconds: 3
 

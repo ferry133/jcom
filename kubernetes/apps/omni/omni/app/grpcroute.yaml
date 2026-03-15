@@ -1,0 +1,21 @@
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: omni-siderolink
+spec:
+  hostnames: ["omni-siderolink.${SECRET_DOMAIN}"]
+  parentRefs:
+    - name: envoy-external
+      namespace: network
+      sectionName: http # GRPCRoute only supports http section
+  rules:
+    - backendRefs:
+        - name: omni
+          namespace: omni
+          port: 8090
+#      matches:
+#        - path:
+#            type: PathPrefix
+#            value: /
+
