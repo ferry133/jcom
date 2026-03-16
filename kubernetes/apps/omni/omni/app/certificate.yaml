@@ -3,6 +3,7 @@ apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
   name: cert-manager-webhook-duckdns
+  namespace: cert-manager
 spec:
   interval: 15m
   timeout: 5m
