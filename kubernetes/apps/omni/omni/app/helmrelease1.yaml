@@ -44,7 +44,7 @@ spec:
     clusterIssuer:
       email: ferry133@gmail.com
       staging:
-        create: true
+        create: false
       production:
         create: true
 
