@@ -15,8 +15,8 @@ spec:
         kind: HelmRepository
         name: my-helm-repo
         namespace: omni
-      targetNamespace: cert-manager
       interval: 5m
+  targetNamespace: cert-manager
   values:
     # The GroupName here is used to identify your company or business unit that
     # created this webhook.
