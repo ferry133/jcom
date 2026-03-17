@@ -6,6 +6,7 @@ resources:
 #  - ./ocirepository.yaml
   - ./helmrepository.yaml
   - ./helmrelease.yaml
+  - ./helmrelease1.yaml
   - ./certificate.yaml
   - ./ingress.yaml
 #  - ./grpcroute.yaml
