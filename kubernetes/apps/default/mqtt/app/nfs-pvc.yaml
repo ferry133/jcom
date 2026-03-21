@@ -4,7 +4,7 @@ apiVersion: v1
 metadata:
   name: mqtt-nfs
   annotations:
-#    nfs.io/storage-path: "k8shomebridge" # not required, depending on whether this annotation was shown in the storage class description
+    nfs.io/storage-path: "mqtt" # maybe not required, depending on whether this annotation was shown in the storage class description
 spec:
   accessModes:
     - ReadWriteOnce

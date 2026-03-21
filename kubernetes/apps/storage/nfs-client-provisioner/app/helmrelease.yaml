@@ -19,7 +19,7 @@ spec:
     storageClass:
       name: ds2-homedirect
       provisionerName: "k8s-sigs.io/first-nfs-subdir-external-provisioner"
-      pathPattern: "$${.PVC.namespace}-$${.PVC.annotations.nfs.io/storage-path}" # "${.PVC.namespace}-${.PVC.name}"
+      pathPattern: "jcom-$${.PVC.namespace}-$${.PVC.name}"   # "jcom-$${.PVC.namespace}-$${.PVC.annotations.nfs.io/storage-path }" #
     nfs:
       server: "10.9.1.12"
       path: "/volume2/homedirect"
