@@ -1,0 +1,33 @@
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: homebridge
+  namespace: default
+spec:
+  interval: 15m
+  timeout: 5m
+  chart:
+    spec:
+      chart: homebridge
+      version: '5.3.2'
+      sourceRef:
+        kind: HelmRepository
+        name: k8s-at-home
+        namespace: default
+      interval: 5m
+  values:
+    replicaCount: 1
+    image:
+      tag: latest
+    env:
+      TZ: "Asia/Taipei"
+    hostNetwork: true
+    persistence:
+      config:
+        enabled: true
+        type: pvc
+        existingClaim: "homebridge-nfs"
+#        storageClass: ds2-homedirect
+#        subPath: "k8s_hb_mount"
+

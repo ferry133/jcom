@@ -1,0 +1,14 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mqtt-nfs
+  annotations:
+#    nfs.io/storage-path: "k8shomebridge" # not required, depending on whether this annotation was shown in the storage class description
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ds2-homedirect
+  resources:
+    requests:
+      storage: 10Gi
