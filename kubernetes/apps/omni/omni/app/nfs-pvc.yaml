@@ -8,7 +8,7 @@ metadata:
 spec:
   accessModes:
     - ReadWriteOnce
-  storageClassName: ds2-homedirect
+  storageClassName: sc-nas
   resources:
     requests:
       storage: 16Gi

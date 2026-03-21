@@ -17,7 +17,7 @@ spec:
       interval: 5m
   values:
     storageClass:
-      name: ds2-homedirect
+      name: sc-nas
       provisionerName: "k8s-sigs.io/first-nfs-subdir-external-provisioner"
       pathPattern: "jcom-$${.PVC.namespace}-$${.PVC.name}"   # "jcom-$${.PVC.namespace}-$${.PVC.annotations.nfs.io/storage-path }" #
     nfs:

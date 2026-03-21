@@ -28,6 +28,4 @@ spec:
         enabled: true
         type: pvc
         existingClaim: "homebridge-nfs"
-#        storageClass: ds2-homedirect
-#        subPath: "k8s_hb_mount"
 
