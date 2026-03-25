@@ -10,4 +10,4 @@ resources:
   - ./namespace.yaml
   - ./echo/ks.yaml
   - ./homebridge/ks.yaml
-  - ./mqtt/ks.yaml
+#  - ./mqtt/ks.yaml
