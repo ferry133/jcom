@@ -726,7 +726,8 @@ spec:
         # -- ClusterIP for the main service.
         clusterIP: ""
         # -- LoadBalancer IP for the main service (only used when type is LoadBalancer).
-        loadBalancerIP: ""
+        loadBalancerIP: 10.9.8.8
+#        loadBalancerIP: ""
       # Kubernetes proxy service configuration.
       # This is a separate service because the Kubernetes proxy does not support h2c,
       # and the h2c annotation on the main service would break it.
@@ -754,9 +755,8 @@ spec:
         # -- NodePort for the WireGuard service.
         nodePort: 30180
         # -- ClusterIP for the WireGuard service.
-        loadBalancerIP: 10.9.8.8
 #        clusterIP: 10.9.8.88
-#        clusterIP: ""
+        clusterIP: ""
     # Omni metrics configuration
     metrics:
       # -- Deploy metrics service
