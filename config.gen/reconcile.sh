@@ -21,10 +21,9 @@ namespace="unknown"
 
 #echo "1 The namespace of helmrelease ${1} is ${namespace}"
 
-kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {namespace=$1; print "2 The namespace of hr " "'${1}'" " is " namespace; print "kubectl -n $1 get all" }'
-
-kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {time}'
-kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {kubectl delete hr $2 -n $1}'
+kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {namespace=$1; print "2 The namespace of hr " "'${1}'" " is " namespace }'
+#kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {time}'
+kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {BEGIN kubectl delete hr $2 -n $1}'
 #kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {kubectl get all}'
 #kubectl get helmrelease -A | awk '{FS=" "} $2=="'${1}'" {kubectl -n $1 get hr }'
 
