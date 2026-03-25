@@ -749,7 +749,7 @@ spec:
         # -- Service type for WireGuard (NodePort or LoadBalancer recommended).
         type: NodePort
         # -- Port for the WireGuard service.
-        port: 50180
+        port: 30180
         # -- NodePort for the WireGuard service.
         nodePort: 30180
         # -- ClusterIP for the WireGuard service.
