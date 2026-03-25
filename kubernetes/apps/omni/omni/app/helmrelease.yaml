@@ -754,8 +754,9 @@ spec:
         # -- NodePort for the WireGuard service.
         nodePort: 30180
         # -- ClusterIP for the WireGuard service.
+        loadBalancerIP: 10.9.8.8
 #        clusterIP: 10.9.8.88
-        clusterIP: ""
+#        clusterIP: ""
     # Omni metrics configuration
     metrics:
       # -- Deploy metrics service
