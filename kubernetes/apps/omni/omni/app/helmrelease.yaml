@@ -650,7 +650,7 @@ spec:
         path: /healthz
         port: omni
         scheme: HTTP
-      periodSeconds: 10
+      periodSeconds: 60
 #      periodSeconds: 5
       successThreshold: 1
       timeoutSeconds: 3
