@@ -1,0 +1,15 @@
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: omni-wireguard-udp
+spec:
+  parentRefs:
+    - name: udp-gateway
+      namespace: omni
+      sectionName: wireguard-udp
+  rules:
+    - backendRefs:
+        - name: omni-wireguard
+          namespace: omni
+          port: 50180

@@ -11,6 +11,8 @@ resources:
   - ./ingress.yaml
 #  - ./grpcroute.yaml
   - ./httproute.yaml
+  - ./udp-gateway.yaml
+  - ./udproute.yaml
 
 
 ##############################

@@ -726,8 +726,7 @@ spec:
         # -- ClusterIP for the main service.
         clusterIP: ""
         # -- LoadBalancer IP for the main service (only used when type is LoadBalancer).
-        loadBalancerIP: 10.9.8.8
-#        loadBalancerIP: ""
+        loadBalancerIP: ""
       # Kubernetes proxy service configuration.
       # This is a separate service because the Kubernetes proxy does not support h2c,
       # and the h2c annotation on the main service would break it.
@@ -748,10 +747,10 @@ spec:
         # -- Additional labels for the WireGuard service.
         labels: {}
         # -- Service type for WireGuard (NodePort or LoadBalancer recommended).
-        type: LoadBalancer
+        type: ClusterIP
 #        type: NodePort
         # -- Port for the WireGuard service.
-        port: 30180
+        port: 50180
         # -- NodePort for the WireGuard service.
         nodePort: 30180
         # -- ClusterIP for the WireGuard service.
