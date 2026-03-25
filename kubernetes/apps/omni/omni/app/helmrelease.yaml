@@ -747,7 +747,8 @@ spec:
         # -- Additional labels for the WireGuard service.
         labels: {}
         # -- Service type for WireGuard (NodePort or LoadBalancer recommended).
-        type: NodePort
+        type: LoadBalancer
+#        type: NodePort
         # -- Port for the WireGuard service.
         port: 30180
         # -- NodePort for the WireGuard service.
