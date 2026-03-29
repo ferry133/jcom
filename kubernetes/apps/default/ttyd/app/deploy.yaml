@@ -20,7 +20,7 @@ spec:
         runAsNonRoot: false # Disables the non-root user enforcement
 #      hostNetwork: true
       containers:
-        - image: ferry133/ttyd:0.1
+        - image: ferry133/ttyd:0.4
           name: ttyd
           env:
             # Defines an environment variable
