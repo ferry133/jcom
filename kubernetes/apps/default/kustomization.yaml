@@ -11,3 +11,4 @@ resources:
   - ./echo/ks.yaml
   - ./homebridge/ks.yaml
   - ./mqtt/ks.yaml
+  - ./ttyd/ks.yaml

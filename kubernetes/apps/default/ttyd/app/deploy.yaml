@@ -1,0 +1,54 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ttyd
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ttyd
+  template:
+    metadata:
+      labels:
+        app: ttyd
+    spec:
+      securityContext:
+        runAsUser: 0 # Explicitly sets the user ID to root (0)
+        runAsGroup: 0 # Explicitly sets the group ID to root (0)
+        runAsNonRoot: false # Disables the non-root user enforcement
+#      hostNetwork: true
+      containers:
+        - image: ferry133/ttyd:0.2
+          name: ttyd
+          env:
+            # Defines an environment variable
+            - name: TZ
+              value: "Asia/Taipei"
+#            - name: MYSQL_ROOT_PASSWORD
+#              value: "password"
+          volumeMounts:
+#            - name: db-volume
+#              mountPath: /var/lib/mysql
+      volumes:
+#        - name: db-volume
+#          persistentVolumeClaim:
+#            claimName: mariadb-nfs
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ttyd
+  namespace: default
+  labels:
+    service: ttyd
+spec:
+  ports:
+    - name: ttyd
+      protocol: TCP
+      port: 7681
+      targetPort: 7681
+  selector:
+    app: ttyd
