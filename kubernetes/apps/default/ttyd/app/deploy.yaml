@@ -5,7 +5,7 @@ metadata:
   name: ttyd
   namespace: default
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: ttyd
@@ -20,7 +20,7 @@ spec:
         runAsNonRoot: false # Disables the non-root user enforcement
 #      hostNetwork: true
       containers:
-        - image: ferry133/ttyd:0.2
+        - image: ferry133/ttyd:0.1
           name: ttyd
           env:
             # Defines an environment variable
