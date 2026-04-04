@@ -466,7 +466,7 @@ spec:
     #  TZ: "Asia/Taipei"
 
     # -- envFrom to pass to Omni.
-    envFrom:
+    envFrom: []
     #- configMapRef:
     #    name: config-map-name
     #- secretRef:
