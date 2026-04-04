@@ -466,11 +466,11 @@ spec:
     #  TZ: "Asia/Taipei"
 
     # -- envFrom to pass to Omni.
-    envFrom: []
+    envFrom:
     #- configMapRef:
     #    name: config-map-name
-    #- secretRef:
-    #    name: secret-name
+      - secretRef:
+        name: omni-gpg-key-secret
 
     # Etcd Encryption Key Configuration
     # This secret contains the GPG private key required to decrypt Omni's master key.
