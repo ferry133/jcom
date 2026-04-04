@@ -481,8 +481,12 @@ spec:
     etcdEncryptionKey:
       # -- Name of an existing Secret containing the GPG private key.
       existingSecret:
-        name: omni-gpg-key-secret
-        key: omni-gpg-key
+        omniAsc:
+          valueFrom:
+            secretKeyRef:
+              name: omni-gpg-key-secret
+              key: omni-gpg-key
+
       # -- GPG private key content (multiline string).
 #      omniAsc: "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlFgEaZbTKRYJKwYBBAHaRw8BAQdAGzFYAaWSmdpzeMFEN5bhRap7ltDtntcWB2WH\nW6psgUAAAP96uqQFkkNpK5eyuPO8qltlbw+zgEsFwCwVBDrAlrF0rg/ItARPbW5p\niJMEExYKADsWIQSPV78cAKFEsWV5r6Y1YMwIr+2p4AUCaZbTKQIbAwULCQgHAgIi\nAgYVCgkICwIEFgIDAQIeBwIXgAAKCRA1YMwIr+2p4KDoAQDs8HIU6KBN/jogUGgN\n0FFwMSBOlvP8ys0Jvcu2gH2GxQD9E36/jm8EEBSo9kDxUrLtH+VPFI4C2vdJP+tT\nuL285gCcXQRpltMpEgorBgEEAZdVAQUBAQdAZ9synhcQo6fBozJjtPbRT+n66Ahf\nyj1zIyiXJygxbmwDAQgHAAD/Qb2U35Z4WJkCLhWfy5SOF8Wk69nYo03AvKeEmyYN\nqagSEoh4BBgWCgAgFiEEj1e/HAChRLFlea+mNWDMCK/tqeAFAmmW0ykCGwwACgkQ\nNWDMCK/tqeB6sgEAv56eiS2iKQ+dfmTpHwJ2ajB9cU1Z+AdXyvzZHZy+KHIA/0jw\n5FCl04tavHNQZmPnNAEeysIpWFZre3IZ78X5994C\n=RHBj\n-----END PGP PRIVATE KEY BLOCK-----"
 
