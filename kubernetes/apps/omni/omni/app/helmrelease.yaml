@@ -470,7 +470,7 @@ spec:
     #- configMapRef:
     #    name: config-map-name
       - secretRef:
-        name: omni-gpg-key-secret
+          name: omni-gpg-key-secret
 
     # Etcd Encryption Key Configuration
     # This secret contains the GPG private key required to decrypt Omni's master key.
