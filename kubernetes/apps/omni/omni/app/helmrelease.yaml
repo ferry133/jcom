@@ -191,6 +191,7 @@ spec:
         #enableTalosPreReleaseVersions: false
         # EnableBreakGlassConfigs controls whether break-glass machine configurations are enabled.
         #enableBreakGlassConfigs: false
+        enableBreakGlassConfigs: true
         # EnableConfigDataCompression controls whether machine configuration data is compressed.
         #enableConfigDataCompression: true
         # EnableClusterImport controls whether the cluster import feature is enabled.
