@@ -47,7 +47,7 @@ spec:
       # -- Image pull policy for Omni.
       pullPolicy: IfNotPresent
       # -- Tag to use for Omni.
-      tag: "v1.5.2"
+      tag: "v1.6.4"
 
     # -- Set to true to bypass the SemVer check (e.g. if using a custom build or nightly tag).
     skipVersionCheck: false
