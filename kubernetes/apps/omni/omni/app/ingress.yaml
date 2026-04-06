@@ -3,8 +3,6 @@
 #kind: Ingress
 #metadata:
 #  annotations:
-#    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-#    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
 #    # add an annotation indicating the issuer to use.
 #    cert-manager.io/cluster-issuer: cert-manager-webhook-duckdns-production
 #  name: omni-ing
@@ -32,39 +30,34 @@
 #    hosts:
 #      - grpctest.dev.mydomain.com
 
----
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  annotations:
-#    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-#    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
-    # add an annotation indicating the issuer to use.
-    cert-manager.io/cluster-issuer: cert-manager-webhook-duckdns-production
-  name: omni-k8s-ing
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: omni-k8s.janncot.duckdns.org
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: omni-k8s-proxy
-            port:
-              number: 8095
-  tls:
-  # This secret must exist beforehand
-  # The cert must also contain the subj-name grpctest.dev.mydomain.com
-  # https://github.com/kubernetes/ingress-nginx/blob/master/docs/examples/PREREQUISITES.md#tls-certificates
-  - secretName: janncot-duckdns-org-production-tls
-    hosts:
-      - omni-k8s.janncot.duckdns.org
-#  - secretName: wildcard.dev.mydomain.com
-#    hosts:
-#      - grpctest.dev.mydomain.com
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   annotations:
+#     # add an annotation indicating the issuer to use.
+#     cert-manager.io/cluster-issuer: cert-manager-webhook-duckdns-production
+#   name: omni-k8s-ing
+# spec:
+#   ingressClassName: nginx
+#   rules:
+#   - host: omni-k8s.janncot.duckdns.org
+#     http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: omni-k8s-proxy
+#             port:
+#               number: 8095
+#   tls:
+#   # This secret must exist beforehand
+#   # The cert must also contain the subj-name grpctest.dev.mydomain.com
+#   # https://github.com/kubernetes/ingress-nginx/blob/master/docs/examples/PREREQUISITES.md#tls-certificates
+#   - secretName: janncot-duckdns-org-production-tls
+#     hosts:
+#       - omni-k8s.janncot.duckdns.org
 
 ---
 apiVersion: networking.k8s.io/v1

@@ -309,8 +309,8 @@ spec:
           # -- The advertised URL for the Kubernetes API Proxy.
           # MUST be specified as a full URL, including scheme (https://).
           # It MUST match the URL of the kubernetes proxy ingress if ingress is used.
-          advertisedURL: https://omni-k8s.janncot.duckdns.org
-#          advertisedURL: https://omni-k8s.janncot.com
+#          advertisedURL: https://omni-k8s.janncot.duckdns.org
+          advertisedURL: https://omni-k8s.janncot.com
         #      advertisedURL: https://kubernetes.omni.example.com
         # Endpoint is the network endpoint the Kubernetes proxy service listens on. It is in the form "host:port".
         #endpoint: "0.0.0.0:8095"
