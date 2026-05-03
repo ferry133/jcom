@@ -1,0 +1,125 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freepbx
+  namespace: freepbx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: freepbx
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: freepbx
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: freepbx
+          image: tiredofit/freepbx:latest
+          env:
+            - name: TZ
+              value: "Asia/Taipei"
+            - name: TIMEZONE
+              value: "Asia/Taipei"
+            - name: DBHOST
+              value: "mariadb.freepbx.svc.cluster.local"
+            - name: DBUSER
+              value: "asterisk"
+            - name: DB_USER
+              value: "asterisk"
+            - name: DBNAME
+              value: "asterisk"
+            - name: DBPORT
+              value: "3306"
+            - name: DBENGINE
+              value: "mysql"
+            - name: CDRDBNAME
+              value: "asteriskcdrdb"
+            - name: RTP_START
+              value: "18000"
+            - name: RTP_FINISH
+              value: "20000"
+            - name: DEBUG_MODE
+              value: "FALSE"
+            - name: ENABLE_CRON
+              value: "FALSE"
+            - name: ENABLE_SMTP
+              value: "FALSE"
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: freepbx-secret
+                  key: mysql-password
+            - name: DBPASS
+              valueFrom:
+                secretKeyRef:
+                  name: freepbx-secret
+                  key: mysql-password
+          ports:
+            - containerPort: 80
+              name: http
+            - containerPort: 5060
+              protocol: UDP
+              name: sip-udp
+            - containerPort: 5060
+              protocol: TCP
+              name: sip-tcp
+            - containerPort: 4569
+              protocol: UDP
+              name: iax2
+            # RTP 18000-20000/udp: hostNetwork 直接 bind，不需列舉
+          volumeMounts:
+            - name: etc
+              mountPath: /etc/asterisk
+            - name: var
+              mountPath: /var/lib/asterisk
+            - name: www
+              mountPath: /var/www/html
+            - name: data
+              mountPath: /data
+            - name: log
+              mountPath: /var/log/asterisk
+            - name: certs
+              mountPath: /etc/apache2/certs
+            - name: usr
+              mountPath: /usr/lib64/asterisk
+      volumes:
+        - name: etc
+          persistentVolumeClaim:
+            claimName: freepbx-etc
+        - name: var
+          persistentVolumeClaim:
+            claimName: freepbx-var
+        - name: www
+          persistentVolumeClaim:
+            claimName: freepbx-www
+        - name: data
+          persistentVolumeClaim:
+            claimName: freepbx-data
+        - name: log
+          persistentVolumeClaim:
+            claimName: freepbx-log
+        - name: certs
+          persistentVolumeClaim:
+            claimName: freepbx-certs
+        - name: usr
+          persistentVolumeClaim:
+            claimName: freepbx-usr
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: freepbx-web
+  namespace: freepbx
+spec:
+  selector:
+    app: freepbx
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

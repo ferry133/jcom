@@ -1,0 +1,105 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-etc
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-etc"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 2Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-var
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-var"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 10Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-www
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-www"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 5Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-data
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-data"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 10Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-log
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-log"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 5Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-certs
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-certs"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 1Gi
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: freepbx-usr
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-usr"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 5Gi

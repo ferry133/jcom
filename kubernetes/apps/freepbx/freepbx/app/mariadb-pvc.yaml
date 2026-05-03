@@ -1,0 +1,15 @@
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: mariadb-data
+  namespace: freepbx
+  annotations:
+    nfs.io/storage-path: "freepbx-mariadb"
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: sc-nas
+  resources:
+    requests:
+      storage: 10Gi
