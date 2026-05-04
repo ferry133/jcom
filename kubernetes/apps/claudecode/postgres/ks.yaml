@@ -16,4 +16,4 @@ spec:
     name: flux-system
     namespace: flux-system
   targetNamespace: claudecode
-  wait: true
+  wait: false
