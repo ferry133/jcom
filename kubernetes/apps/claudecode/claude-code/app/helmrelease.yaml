@@ -18,11 +18,6 @@ spec:
               repository: ghcr.io/ferry133/claude-code
               tag: latest
             env:
-              TTYD_CREDENTIAL:
-                valueFrom:
-                  secretKeyRef:
-                    name: claude-code-secret
-                    key: TTYD_CREDENTIAL
               DATABASE_URL:
                 valueFrom:
                   secretKeyRef:
@@ -130,11 +125,6 @@ spec:
               repository: ghcr.io/ferry133/claude-code
               tag: latest
             env:
-              TTYD_CREDENTIAL:
-                valueFrom:
-                  secretKeyRef:
-                    name: claude-code-secret
-                    key: TTYD_CREDENTIAL
               DATABASE_URL:
                 valueFrom:
                   secretKeyRef:
