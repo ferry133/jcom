@@ -68,7 +68,7 @@ spec:
               - --cookie-secure=true
               - --set-xauthrequest=true
               - --pass-access-token=false
-              - --skip-provider-button=false
+              - --skip-provider-button=true
             env:
               OAUTH2_PROXY_CLIENT_ID:
                 valueFrom:
