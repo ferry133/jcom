@@ -64,20 +64,12 @@ spec:
               limits:
                 memory: 1Gi
     persistence:
-      claude-config:
-        type: persistentVolumeClaim
-        storageClass: sc-nas
-        accessMode: ReadWriteOnce
-        size: 5Gi
+      claude-users:
+        type: nfs
+        server: "${NAS_SERVER}"
+        path: "${NAS_CLAUDE_USERS_PATH}"
         globalMounts:
-          - path: /home/claude/.claude
-      claude-workspace:
-        type: persistentVolumeClaim
-        storageClass: sc-nas
-        accessMode: ReadWriteOnce
-        size: 20Gi
-        globalMounts:
-          - path: /home/claude/workspace
+          - path: /mnt/claude-users
       coding:
         type: nfs
         server: "${NAS_SERVER}"
@@ -171,20 +163,12 @@ spec:
               limits:
                 memory: 1Gi
     persistence:
-      claude-config:
-        type: persistentVolumeClaim
-        storageClass: sc-nas
-        accessMode: ReadWriteOnce
-        size: 5Gi
+      claude-users:
+        type: nfs
+        server: "${NAS_SERVER}"
+        path: "${NAS_CLAUDE_USERS_PATH}"
         globalMounts:
-          - path: /home/claude/.claude
-      claude-workspace:
-        type: persistentVolumeClaim
-        storageClass: sc-nas
-        accessMode: ReadWriteOnce
-        size: 20Gi
-        globalMounts:
-          - path: /home/claude/workspace
+          - path: /mnt/claude-users
       coding:
         type: nfs
         server: "${NAS_SERVER}"
