@@ -69,6 +69,7 @@ spec:
               - --set-xauthrequest=true
               - --pass-access-token=false
               - --skip-provider-button=true
+              - --prompt=select_account
             env:
               OAUTH2_PROXY_CLIENT_ID:
                 valueFrom:
