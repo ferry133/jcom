@@ -124,6 +124,14 @@ spec:
           cc:
             app:
               - path: /home/claude/coding
+      data:
+        type: nfs
+        server: "10.9.1.12"
+        path: "/volume2/jia.homedesign"
+        advancedMounts:
+          cc:
+            app:
+              - path: /home/claude/data
     defaultPodOptions:
       securityContext:
         runAsNonRoot: true
