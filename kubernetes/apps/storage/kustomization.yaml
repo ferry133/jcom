@@ -9,3 +9,4 @@ components:
 resources:
   - ./namespace.yaml
   - ./nfs-client-provisioner/ks.yaml
+  - ./local-path-provisioner/ks.yaml
