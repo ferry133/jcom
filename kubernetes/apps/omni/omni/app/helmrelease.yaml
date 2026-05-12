@@ -670,7 +670,7 @@ spec:
       annotations: {}
       # -- Name of an existing PersistentVolumeClaim to use.
       # If set, a new PVC will NOT be created.
-      existingClaim: "omni-nfs"
+      existingClaim: "omni-local"
       # -- Storage Class to use for the PVC.
       # Leave empty to use the cluster's default storage class.
       storageClassName: ""
