@@ -117,30 +117,6 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
-# ── extras/storage/nfs-subdir ─────────────────────────────────────────────────────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-nfs-subdir
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/storage/nfs-subdir
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: jg-base
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: cluster-apps-base
----
 # ── extras/ingress-nginx/ingress-nginx ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
