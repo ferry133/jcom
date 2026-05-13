@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs -I {} basename {})",
+      "Bash(ssh 10.9.1.20 \"docker inspect freepbx_server freepbx_mariadb 2>/dev/null | python3 -c \\\\\"import json,sys; data=json.load\\(sys.stdin\\); [print\\('=== ' + c['Name'] + ' ==='\\); print\\('Image:', c['Config']['Image']\\); print\\('Env:', [e for e in c['Config']['Env'] if not any\\(x in e for x in ['PASSWORD','SECRET','KEY']\\)]\\); print\\('Ports:', c['HostConfig']['PortBindings']\\); print\\('Volumes:', c['HostConfig']['Binds']\\); print\\('Networks:', list\\(c['NetworkSettings']['Networks'].keys\\(\\)\\)\\); print\\(\\) for c in data]\\\\\"\")",
+      "Bash(sshpass -p 'chance00deb' ssh -o StrictHostKeyChecking=no root@10.9.1.20 \"find / -name 'docker-compose.yml' -o -name 'compose.yaml' -o -name 'compose.yml' 2>/dev/null | grep -i freepbx | head -5\")",
+      "Bash(ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@10.9.1.20 \"echo connected\")",
+      "Bash(expect -c ' *)",
+      "Bash(expect)",
+      "Bash(kubectl get *)",
+      "Bash(sops --encrypt --in-place kubernetes/apps/freepbx/freepbx/app/secret.sops.yaml)",
+      "Bash(git -C /Users/ferry133/coding/jcom status)",
+      "Bash(git -C /Users/ferry133/coding/jcom add kubernetes/apps/freepbx/)",
+      "Bash(git -C /Users/ferry133/coding/jcom diff --staged --stat)",
+      "Bash(git -C /Users/ferry133/coding/jcom commit -m ' *)",
+      "Bash(git -C /Users/ferry133/coding/jcom push)",
+      "Bash(python3)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/freepbx_sync.sh)",
+      "Read(//tmp/**)",
+      "Bash(ssh 10.9.1.12 \"du -sh /volume2/homedirect/jcom-omni-omni-nfs/*\")"
+    ]
+  }
+}

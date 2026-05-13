@@ -13,6 +13,11 @@ def basename(value: str) -> str:
     return Path(value).stem
 
 
+# Base64-encode a string
+def b64encode(value: str) -> str:
+    return base64.b64encode(value.encode('utf-8')).decode('utf-8')
+
+
 # Return the nth host in a CIDR range
 def nthhost(value: str, query: int) -> str:
     try:
@@ -153,7 +158,8 @@ class Plugin(makejinja.plugin.Plugin):
     def filters(self) -> makejinja.plugin.Filters:
         return [
             basename,
-            nthhost
+            nthhost,
+            b64encode
         ]
 
 

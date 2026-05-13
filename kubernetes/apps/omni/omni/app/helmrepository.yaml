@@ -1,9 +1,0 @@
----
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: HelmRepository
-metadata:
-  name: my-helm-repo
-  namespace: omni
-spec:
-  interval: 15m
-  url: https://ferry133.github.io/helm-charts
