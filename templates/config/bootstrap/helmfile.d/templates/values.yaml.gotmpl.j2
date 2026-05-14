@@ -1,1 +1,9 @@
-{{ (fromYaml (readFile (printf "../../../kubernetes/apps/%s/%s/app/helmrelease.yaml" .Release.Namespace .Release.Name))).spec.values | toYaml }}
+{{- $base := printf "../../../../jg-base/kubernetes/apps/base/%s/%s/app/helmrelease.yaml" .Release.Namespace .Release.Name -}}
+{{- $extras := printf "../../../../jg-base/kubernetes/apps/extras/%s/%s/app/helmrelease.yaml" .Release.Namespace .Release.Name -}}
+{{- $check := exec "sh" (list "-c" (printf "test -f '%s' && echo yes || echo no" $base)) | trim -}}
+{{- $path := ternary $base $extras (eq $check "yes") -}}
+{{- $values := (fromYaml (readFile $path)).spec.values -}}
+{{- if and (eq .Release.Namespace "flux-system") (eq .Release.Name "flux-instance") -}}
+{{- $values = mergeOverwrite $values (dict "instance" (dict "sync" (dict "url" "https://github.com/#{ repository_name }#.git"))) -}}
+{{- end -}}
+{{ $values | toYaml }}
