@@ -21,7 +21,6 @@ import (
 	repository_visibility?: *"public" | "private"
 	cloudflare_domain: net.FQDN
 	cloudflare_token: string
-	cloudflare_tunnel_token?: string & !=""
 	cloudflare_gateway_addr: net.IPv4 & !=cluster_api_addr & !=cluster_gateway_addr & !=cluster_dns_gateway_addr
 	github_webhook_token?: string & !=""
 	cilium_bgp_router_addr?: net.IPv4 & !=""
