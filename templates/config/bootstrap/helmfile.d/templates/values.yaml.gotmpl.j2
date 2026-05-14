@@ -6,4 +6,6 @@
 {{- if and (eq .Release.Namespace "flux-system") (eq .Release.Name "flux-instance") -}}
 {{- $values = mergeOverwrite $values (dict "instance" (dict "sync" (dict "url" "https://github.com/#{ repository_name }#.git"))) -}}
 {{- end -}}
-{{ $values | toYaml }}
+{{- $yaml := $values | toYaml -}}
+{{- $yaml = $yaml | replace "${COREDNS_CLUSTER_IP}" "#{ coredns_cluster_ip | default('10.96.0.10') }#" -}}
+{{ $yaml }}
