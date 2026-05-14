@@ -21,3 +21,4 @@ talosconfig
 Thumbs.db
 config.gen/cluster.yaml
 config.gen/nodes.yaml
+priv-key.asc
