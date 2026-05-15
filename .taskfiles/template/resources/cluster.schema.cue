@@ -56,6 +56,7 @@ import (
 	synophoto_nas_password?: string
 	omni_gpg_key?: string
 	mqtt_lb_ip?: net.IPv4 & !=""
+	ingress_nginx_lb_ip?: net.IPv4 & !=""
 	cloudflare_lan_tunnel_token?: string & !=""
 }
 
