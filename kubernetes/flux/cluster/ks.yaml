@@ -357,6 +357,30 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
+# ── extras/monitoring/daily-check ─────────────────────────────────────────────────────────
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: extras-daily-check
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/apps/extras/monitoring/daily-check
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: jg-base
+    namespace: flux-system
+  postBuild:
+    substituteFrom:
+      - name: cluster-secrets
+        kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+---
 # ── extras/omni/omni ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization

@@ -42,6 +42,7 @@ import (
 	postgres_password?: string & !=""
 	trello_api_key?: string
 	trello_api_token?: string
+	trello_board_id?: string
 	line_channel_access_token?: string
 	line_channel_secret?: string
 	line_notify_group_id?: string
@@ -58,6 +59,15 @@ import (
 	mqtt_lb_ip?: net.IPv4 & !=""
 	ingress_nginx_lb_ip?: net.IPv4 & !=""
 	cloudflare_lan_tunnel_token?: string & !=""
+	// monitoring/daily-check (optional)
+	daily_check_smtp_host?:             string
+	daily_check_smtp_port?:             string
+	daily_check_smtp_username?:         string
+	daily_check_smtp_password?:         string
+	daily_check_smtp_from?:             string
+	daily_check_notify_email_to?:       string
+	daily_check_healthchecks_ping_url?: string
+	daily_check_endpoints?:             string
 }
 
 #Config
