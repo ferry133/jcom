@@ -92,6 +92,39 @@ spec:
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
+    # ── jcom-only Cilium override (this single-node cluster HOSTS Omni) ──────────
+    # Global jg-base Cilium uses vxlan tunnel + MTU 1370 for KubeSpan multi-node
+    # clusters. On jcom that 1370 pod-MTU is too small for Omni's SideroLink
+    # WireGuard → "sendmmsg: message too long" → Omni UI / kubectl go slow.
+    # jcom needs no KubeSpan (single node) → revert Cilium to native + MTU 1500.
+    # JSON6902 append (NOT strategic-merge): appends to the `cilium` child
+    # Kustomization's spec.patches so the generic HR-strategy patch above is kept
+    # (a 2nd strategic-merge would REPLACE the whole patches list — verified).
+    - patch: |-
+        - op: add
+          path: /spec/patches/-
+          value:
+            patch: |-
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: cilium
+              spec:
+                values:
+                  routingMode: native
+                  ipv4NativeRoutingCIDR: "10.42.0.0/16"
+                  autoDirectNodeRoutes: true
+                  MTU: 1500
+                  loadBalancer:
+                    mode: "dsr"
+            target:
+              group: helm.toolkit.fluxcd.io
+              kind: HelmRelease
+              name: cilium
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: cilium
 ---
 # ── extras/storage/local-path-provisioner ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
