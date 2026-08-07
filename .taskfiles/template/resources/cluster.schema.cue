@@ -27,9 +27,11 @@ import (
 	cilium_bgp_router_asn?: string & !=""
 	cilium_bgp_node_asn?: string & !=""
 	cilium_loadbalancer_mode?: *"dsr" | "snat"
-	nas_server?: net.IPv4 & !=""
-	nas_path?: string & !=""
-	nas_coding_path?: string & !=""
+	// NAS — required by the base apps storage/nfs-subdir (sc-nas) and
+	// claudecode/claude-code (coding workspace NFS mount).
+	nas_server: net.IPv4 & !=""
+	nas_path: string & !=""
+	nas_coding_path: string & !=""
 	cluster_name: string & !=""
 	coredns_cluster_ip?: net.IPv4
 	extras?: [...string]
@@ -37,6 +39,9 @@ import (
 	freepbx_mysql_password?: string & !=""
 	claudecode_postgres_password?: string & !=""
 	claude_code_database_url?: string
+	// claudecode/claude-code (base app on every cluster). claude_instances
+	// defaults to ["im"] at render time; ttyd_credential is only unused when
+	// claudecode_auth0_* switches the instances to OIDC login.
 	claude_instances?: [...string]
 	ttyd_credential?: string & !=""
 	postgres_password?: string & !=""
@@ -59,7 +64,9 @@ import (
 	mqtt_lb_ip?: net.IPv4 & !=""
 	ingress_nginx_lb_ip?: net.IPv4 & !=""
 	cloudflare_lan_tunnel_token?: string & !=""
-	// monitoring/daily-check (optional)
+	// monitoring/daily-check (base app on every cluster). Fields stay optional:
+	// an unconfigured cluster's CronJob exits 0 with a "not configured" log
+	// line instead of failing daily, so nothing breaks until these are set.
 	daily_check_smtp_host?:             string
 	daily_check_smtp_port?:             string
 	daily_check_smtp_username?:         string

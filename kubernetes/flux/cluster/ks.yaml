@@ -147,6 +147,34 @@ spec:
         kind: Kustomization
         name: spegel
 ---
+# ── claude-code instances (base; per-cluster rendered from claude_instances) ──
+# The shared pieces (namespace, SA/RBAC, OCIRepository, secrets) come from
+# apps/base/claudecode in jg-base; only the per-instance HelmReleases are
+# rendered here, because instance names and the optional oauth2-proxy /
+# talos-mcp sidecars are template-time structure, not Flux values.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-instances
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/apps/base/claudecode/claude-code/instances
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  postBuild:
+    substituteFrom:
+      - name: cluster-secrets
+        kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+---
 # ── extras/storage/local-path-provisioner ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -315,54 +343,6 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
-# ── extras/claudecode/claude-code ─────────────────────────────────────────────────────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-claude-code
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/claudecode/claude-code
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: jg-base
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: cluster-apps-base
----
-# ── claude-code instances (per-cluster rendered from claude_instances) ────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-claude-code-instances
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/claudecode/claude-code/instances
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: flux-system
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: extras-claude-code
----
 # ── extras/claudecode/postgres ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -399,30 +379,6 @@ spec:
   deletionPolicy: WaitForTermination
   interval: 1h
   path: ./kubernetes/apps/extras/freepbx/freepbx
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: jg-base
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: cluster-apps-base
----
-# ── extras/monitoring/daily-check ─────────────────────────────────────────────────────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-daily-check
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/monitoring/daily-check
   prune: true
   sourceRef:
     kind: GitRepository

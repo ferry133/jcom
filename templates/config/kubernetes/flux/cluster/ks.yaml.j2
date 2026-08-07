@@ -146,7 +146,40 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: spegel
-#% for extra in extras | default([]) %#
+---
+# ── claude-code instances (base; per-cluster rendered from claude_instances) ──
+# The shared pieces (namespace, SA/RBAC, OCIRepository, secrets) come from
+# apps/base/claudecode in jg-base; only the per-instance HelmReleases are
+# rendered here, because instance names and the optional oauth2-proxy /
+# talos-mcp sidecars are template-time structure, not Flux values.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-instances
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/apps/base/claudecode/claude-code/instances
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  postBuild:
+    substituteFrom:
+      - name: cluster-secrets
+        kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+#| claudecode/claude-code and monitoring/daily-check moved from extras to base
+   (2026-08-07); the filter below skips them so a per-user cluster.yaml that
+   still lists either does not render a Kustomization pointing at a jg-base
+   path that no longer exists. #|
+#% set _now_base = ['claudecode/claude-code', 'monitoring/daily-check'] %#
+#% for extra in extras | default([]) if extra not in _now_base %#
 #% set _app = extra.split('/')[1] %#
 ---
 # ── extras/#{extra}# ─────────────────────────────────────────────────────────
@@ -172,30 +205,4 @@ spec:
         kind: Secret
   dependsOn:
     - name: cluster-apps-base
-#% if extra == 'claudecode/claude-code' %#
----
-# ── claude-code instances (per-cluster rendered from claude_instances) ────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-claude-code-instances
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/claudecode/claude-code/instances
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: flux-system
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: extras-claude-code
-#% endif %#
 #% endfor %#
