@@ -19,18 +19,74 @@ spec:
     controllers:
       #{instance}#:
         strategy: Recreate
+        # Client remote-support terminal: off by default. Scale to 1 only
+        # while actively supporting this client, to minimize the standing
+        # exposure window of a LAN-facing root shell with network-scanning
+        # capability and cluster-admin RBAC (see rbac.yaml in the jg-base
+        # claudecode app).
+        replicas: 0
+        serviceAccount:
+          name: claude-code # shared SA, RBAC bound in jg-base claudecode app
         containers:
           app:
             image:
               repository: ghcr.io/ferry133/claude-code
-              tag: latest
+              tag: 00c2f68
             env:
+              # The pod runs as uid 0 (see defaultPodOptions), which would
+              # resolve HOME=/root -- but all state (claude config PVC,
+              # keyring, workspace) lives under /home/claude.
+              HOME: /home/claude
+              # Without this, onboarding/account state goes to ~/.claude.json
+              # in the ephemeral overlay and login is lost on every pod
+              # restart; inside CLAUDE_CONFIG_DIR it lands on the PVC.
+              CLAUDE_CONFIG_DIR: /home/claude/.claude
+#% if talos_mcp_config is defined %#
+              # Registers the talos-mcp sidecar as a remote MCP server (see
+              # claude-session in k8scc) -- reachable only via loopback since
+              # this pod is hostNetwork.
+              TALOS_MCP_URL: http://127.0.0.1:8765/sse
+#% endif %#
+#% if claudecode_auth0_domain is defined %#
+              # OIDC mode: the oauth2-proxy sidecar is the only way in --
+              # ttyd binds loopback and requires the email header the proxy
+              # injects (value surfaces as TTYD_USER -> CLAUDE_USER_ID).
+              # Explicit IP, not "lo": ttyd resolves an interface name to its
+              # first non-127 address (Talos puts 169.254.x.x on lo).
+              TTYD_INTERFACE: 127.0.0.1
+              TTYD_AUTH_HEADER: X-Forwarded-Email
+#% else %#
               TTYD_CREDENTIAL:
                 valueFrom:
                   secretKeyRef:
                     name: claude-code-secret
                     key: TTYD_CREDENTIAL
+#% endif %#
             probes:
+#% if claudecode_auth0_domain is defined %#
+              # ttyd binds loopback, unreachable from kubelet's tcpSocket
+              # probe (hostNetwork pod IP) -- check from inside the pod.
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  exec:
+                    command: ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7681"]
+                  initialDelaySeconds: 15
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  exec:
+                    command: ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7681"]
+                  initialDelaySeconds: 15
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+#% else %#
               liveness:
                 enabled: true
                 custom: true
@@ -51,15 +107,149 @@ spec:
                   periodSeconds: 30
                   timeoutSeconds: 5
                   failureThreshold: 3
-            securityContext:
-              allowPrivilegeEscalation: false
-              capabilities: { drop: ["ALL"] }
+#% endif %#
             resources:
               requests:
                 cpu: 100m
                 memory: 256Mi
               limits:
                 memory: 1Gi
+#% if talos_mcp_config is defined %#
+          talos-mcp:
+            # Own container, own credential mount -- the app container above
+            # never sees this secret. See openspec/changes/insideman in
+            # jg-base for the full design.
+            image:
+              repository: ghcr.io/ferry133/claude-code
+              tag: 00c2f68
+            command: ["python3", "/usr/local/bin/talos_mcp_server.py"]
+            env:
+              TALOSCONFIG: /etc/talos-mcp/talosconfig
+              # The talosconfig above carries no key material (Omni's siderov1
+              # auth needs either a locally-registered PGP key -- which a
+              # fresh container never has -- or these two env vars, read
+              # directly by talosctl's own auth library). Endpoint must be a
+              # direct, non-Cloudflare-Tunnel gRPC path (see talos-mcp-secret
+              # in jg-base) -- confirmed 2026-07-30 against jg-jiahd that the
+              # Tunnel breaks gRPC trailers the siderov1 proxy depends on.
+              OMNI_SERVICE_ACCOUNT_KEY:
+                valueFrom:
+                  secretKeyRef:
+                    name: talos-mcp-secret
+                    key: saKey
+              OMNI_ENDPOINT:
+                valueFrom:
+                  secretKeyRef:
+                    name: talos-mcp-secret
+                    key: omniEndpoint
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities: { drop: ["ALL"] }
+            probes:
+              # FastMCP binds 127.0.0.1 only (see talos_mcp_server.py); on a
+              # hostNetwork pod, kubelet's tcpSocket probe dials the pod/node
+              # IP, not loopback -- same class of bug as ttyd's OIDC-mode
+              # probes above. exec + /dev/tcp/127.0.0.1 checks from inside.
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  exec:
+                    command: ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8765"]
+                  initialDelaySeconds: 10
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  exec:
+                    command: ["bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8765"]
+                  initialDelaySeconds: 10
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                memory: 128Mi
+#% endif %#
+#% if claudecode_auth0_domain is defined %#
+          oauth2-proxy:
+            image:
+              repository: quay.io/oauth2-proxy/oauth2-proxy
+              tag: v7.15.3
+            args:
+              - --http-address=0.0.0.0:4180
+              - --upstream=http://127.0.0.1:7681
+              - --provider=oidc
+              - --oidc-issuer-url=https://#{ claudecode_auth0_domain }#/
+              - --scope=openid profile email
+              - --redirect-url=https://#{instance}#.${SECRET_DOMAIN}/oauth2/callback
+              - --authenticated-emails-file=/etc/oauth2-proxy/allowed-emails
+              - --skip-provider-button=true
+              - --reverse-proxy=true
+              - --cookie-secure=true
+              - --cookie-expire=168h
+            env:
+              OAUTH2_PROXY_CLIENT_ID:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: OAUTH2_PROXY_CLIENT_ID
+              OAUTH2_PROXY_CLIENT_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: OAUTH2_PROXY_CLIENT_SECRET
+              OAUTH2_PROXY_COOKIE_SECRET:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: OAUTH2_PROXY_COOKIE_SECRET
+            probes:
+              liveness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 4180
+                  initialDelaySeconds: 5
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+              readiness:
+                enabled: true
+                custom: true
+                spec:
+                  tcpSocket:
+                    port: 4180
+                  initialDelaySeconds: 5
+                  periodSeconds: 30
+                  timeoutSeconds: 5
+                  failureThreshold: 3
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                memory: 128Mi
+#% endif %#
+#% if claudecode_auth0_domain is defined %#
+    configMaps:
+      oauth2-emails:
+        data:
+          # One email per line, rendered from claudecode_allowed_emails at
+          # template time -- deliberately NOT a Flux var: postBuild
+          # substitution collapses newlines in multi-line values.
+          allowed-emails: |
+#% for email in claudecode_allowed_emails.split(',') %#
+            #{ email | trim }#
+#% endfor %#
+#% endif %#
     persistence:
       claude-config:
         type: persistentVolumeClaim
@@ -68,6 +258,10 @@ spec:
         size: 5Gi
         globalMounts:
           - path: /home/claude/.claude
+          # gnome-keyring's store -- claude's OAuth tokens land here via
+          # secret-service; without this mount they die with the pod.
+          - path: /home/claude/.local/share/keyrings
+            subPath: keyrings
       claude-workspace:
         type: persistentVolumeClaim
         storageClass: sc-nas
@@ -81,16 +275,60 @@ spec:
         path: "${NAS_CODING_PATH}"
         globalMounts:
           - path: /home/claude/coding
+#% if claudecode_auth0_domain is defined %#
+      oauth2-emails:
+        type: configMap
+        identifier: oauth2-emails
+        advancedMounts:
+          #{instance}#:
+            oauth2-proxy:
+              - path: /etc/oauth2-proxy/allowed-emails
+                subPath: allowed-emails
+#% endif %#
+#% if talos_mcp_config is defined %#
+      talos-mcp-config:
+        type: secret
+        name: talos-mcp-secret
+        advancedMounts:
+          #{instance}#:
+            talos-mcp:
+              - path: /etc/talos-mcp/talosconfig
+                subPath: talosconfig
+                readOnly: true
+#% endif %#
     defaultPodOptions:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
+        # root, not uid 1000 (user-confirmed 2026-07-26): the NAS NFS exports
+        # only allow root -- uid 1000 saw /home/claude/coding as d---------
+        # (mode 000). Root's default runtime caps also cover NET_RAW, which
+        # retires the setcap-file-capability + allowPrivilegeEscalation dance
+        # the scanners needed under uid 1000. HOME is pinned to /home/claude
+        # via container env.
+        runAsUser: 0
+        runAsGroup: 0
+      labels:
+        hostnetwork-group: claude-code
+      # hostNetwork pods all bind :7681 on the node -- hard-require spreading
+      # across nodes so multiple claude_instances on the same client never
+      # collide.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  hostnetwork-group: claude-code
+              topologyKey: kubernetes.io/hostname
     service:
       app:
         ports:
           http:
+#% if claudecode_auth0_domain is defined %#
+            port: 4180
+#% else %#
             port: 7681
+#% endif %#
     route:
       app:
         hostnames: ["#{instance}#.${SECRET_DOMAIN}"]
@@ -101,5 +339,9 @@ spec:
         rules:
           - backendRefs:
               - identifier: app
+#% if claudecode_auth0_domain is defined %#
+                port: 4180
+#% else %#
                 port: 7681
+#% endif %#
 #% endfor %#
