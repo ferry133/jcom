@@ -41,6 +41,13 @@ spec:
               # in the ephemeral overlay and login is lost on every pod
               # restart; inside CLAUDE_CONFIG_DIR it lands on the PVC.
               CLAUDE_CONFIG_DIR: /home/claude/.claude
+              # tmux asks the locale whether an attaching client can take
+              # UTF-8; with LANG unset it decides no and rewrites every
+              # non-ASCII cell as "_" on the way to the browser (diagnosed on
+              # jg-jiahd 2026-08-11). Fixed at the image level too (LANG +
+              # `tmux -u`), but set here as well so it holds on any tag
+              # predating that and regardless of what the image ships.
+              LANG: C.UTF-8
 #% if talos_mcp_config is defined %#
               # Registers the talos-mcp sidecar as a remote MCP server (see
               # claude-session in k8scc) -- reachable only via loopback since
