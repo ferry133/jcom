@@ -36,7 +36,7 @@ spec:
           app:
             image:
               repository: ghcr.io/ferry133/claude-code
-              tag: 2dfaa9b
+              tag: 8228f58
             env:
               # The pod runs as uid 0 (see defaultPodOptions), which would
               # resolve HOME=/root -- but all state (claude config PVC,
@@ -263,7 +263,7 @@ spec:
           app:
             image:
               repository: ghcr.io/ferry133/claude-code
-              tag: 2dfaa9b
+              tag: 8228f58
             env:
               # The pod runs as uid 0 (see defaultPodOptions), which would
               # resolve HOME=/root -- but all state (claude config PVC,
