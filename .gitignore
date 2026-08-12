@@ -10,6 +10,7 @@
 # Template config files
 /cluster.yaml
 /nodes.yaml
+/trello-notifier.yaml
 # Kubernetes
 kubeconfig
 talosconfig
