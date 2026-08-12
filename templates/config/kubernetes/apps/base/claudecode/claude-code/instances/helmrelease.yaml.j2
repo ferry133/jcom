@@ -24,7 +24,13 @@ spec:
         # exposure window of a LAN-facing root shell with network-scanning
         # capability and cluster-admin RBAC (see rbac.yaml in the jg-base
         # claudecode app).
-        replicas: 0
+        #
+        # jcom deviates for "im" only, which is pinned to 1 so it stays
+        # reachable at im.${SECRET_DOMAIN} without a manual `kubectl scale`
+        # that Flux keeps resetting to 0. "cc" keeps the upstream default of
+        # 0 and is still scaled by hand when needed. User-confirmed
+        # 2026-08-12.
+        replicas: #{ 1 if instance == "im" else 0 }#
         serviceAccount:
           name: claude-code # shared SA, RBAC bound in jg-base claudecode app
         containers:
