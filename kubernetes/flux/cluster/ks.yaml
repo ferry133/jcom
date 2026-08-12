@@ -92,14 +92,46 @@ spec:
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
-    # ── jcom-only Cilium override (this single-node cluster HOSTS Omni) ──────────
-    # Global jg-base Cilium uses vxlan tunnel + MTU 1370 for KubeSpan multi-node
-    # clusters. On jcom that 1370 pod-MTU is too small for Omni's SideroLink
-    # WireGuard → "sendmmsg: message too long" → Omni UI / kubectl go slow.
-    # jcom needs no KubeSpan (single node) → revert Cilium to native + MTU 1500.
-    # JSON6902 append (NOT strategic-merge): appends to the `cilium` child
-    # Kustomization's spec.patches so the generic HR-strategy patch above is kept
-    # (a 2nd strategic-merge would REPLACE the whole patches list — verified).
+    # suspended: storage_backend is nfs; replicated storage also needs Talos system extensions on every node
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: longhorn
+          namespace: flux-system
+        spec:
+          suspend: true
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: longhorn
+    # suspended: this profile declares its LAN addresses in cluster.yaml, so there is nothing to discover
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: lan-address-probe
+          namespace: flux-system
+        spec:
+          suspend: true
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: lan-address-probe
+    # suspended: single-node cluster: a peer-to-peer image mirror has no peers
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: spegel
+          namespace: flux-system
+        spec:
+          suspend: true
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: spegel
+    # native routing: this cluster hosts Omni and SideroLink needs MTU 1500
     - patch: |-
         - op: add
           path: /spec/patches/-
@@ -125,27 +157,6 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: cilium
-    # ── jcom-only: disable Spegel (single-node cluster) ─────────────────────────
-    # Spegel is a peer-to-peer image mirror — pointless on 1 node, and the
-    # cluster-template disables it for single-node (spegel_enabled = nodes > 1).
-    # jg-base deploys it unconditionally; on jcom it never became Ready and, before
-    # dying, wrote /etc/cri/conf.d/hosts/_default/hosts.toml mirroring ALL registries
-    # to dead :29999/:30021 → every uncached image pull failed cluster-wide.
-    # Suspend the spegel child Kustomization so Flux stops reconciling/recreating it.
-    # (Scalar-only strategic merge: does NOT set spec.patches, so the generic
-    # HR-strategy patch above is preserved.)
-    - patch: |-
-        apiVersion: kustomize.toolkit.fluxcd.io/v1
-        kind: Kustomization
-        metadata:
-          name: spegel
-          namespace: flux-system
-        spec:
-          suspend: true
-      target:
-        group: kustomize.toolkit.fluxcd.io
-        kind: Kustomization
-        name: spegel
 ---
 # ── claude-code instances (base; per-cluster rendered from claude_instances) ──
 # The shared pieces (namespace, SA/RBAC, OCIRepository, secrets) come from

@@ -1,0 +1,28 @@
+---
+# Trello LINE Notifier — per-app configuration
+# Copy this file to trello-notifier.yaml and fill in your values.
+# trello-notifier.yaml is gitignored and never committed.
+
+trello_notifier:
+  # Set to true to include this app in your cluster
+  enabled: false
+
+  # Trello API credentials
+  # Get from: https://trello.com/app-key
+  trello_api_key: ""
+  trello_token: ""
+
+  # LINE Messaging API credentials
+  # Get from: https://developers.line.biz/console/
+  line_channel_access_token: ""
+  line_channel_secret: ""
+
+  # LINE User IDs for each contact person.
+  # Add the LINE official account as friend first, then get the User ID from webhook.
+  # Leave empty to skip that contact.
+  contacts:
+    Larry: ""
+    LarryOffice: ""
+    SA: ""
+    # 端慧: ""
+    # yan: ""

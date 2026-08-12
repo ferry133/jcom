@@ -14,21 +14,28 @@ spec:
     kind: OCIRepository
     name: claude-code
   interval: 1h
+  # With replicas at 0 no pod ever schedules, and a WaitForFirstConsumer storage
+  # class binds a PVC only when one does — so Helm waiting for these claims to
+  # bind would time out and fail the release permanently. Immediate binding
+  # (what an NFS class does) hides this; local-path exposes it. Harmless when
+  # the instance is always on, so it is not made conditional.
+  install:
+    disableWait: true
+  upgrade:
+    disableWait: true
   values:
     controllers:
       cc:
         strategy: Recreate
-        # Client remote-support terminal: off by default. Scale to 1 only
-        # while actively supporting this client, to minimize the standing
-        # exposure window of a LAN-facing root shell with network-scanning
-        # capability and cluster-admin RBAC (see rbac.yaml in the jg-base
-        # claudecode app).
+        # A LAN-facing root shell with network-scanning capability and
+        # cluster-admin RBAC (see rbac.yaml in the jg-base claudecode app), so
+        # it is off unless the cluster asks for it: scale to 1 only while
+        # actively supporting this client.
         #
-        # jcom deviates for "im" only, which is pinned to 1 so it stays
-        # reachable at im.${SECRET_DOMAIN} without a manual `kubectl scale`
-        # that Flux keeps resetting to 0. "cc" keeps the upstream default of
-        # 0 and is still scaled by hand when needed. User-confirmed
-        # 2026-08-12.
+        # Declared rather than scaled by hand. A `kubectl scale` survives until
+        # the next reconcile and then vanishes, which reads as an outage with no
+        # cause — jgt-omni lost its terminal exactly that way on 2026-08-12, and
+        # jg-jiahd carries a hand-edited copy of this file for the same reason.
         replicas: 0
         serviceAccount:
           name: claude-code # shared SA, RBAC bound in jg-base claudecode app
@@ -48,10 +55,11 @@ spec:
               CLAUDE_CONFIG_DIR: /home/claude/.claude
               # tmux asks the locale whether an attaching client can take
               # UTF-8; with LANG unset it decides no and rewrites every
-              # non-ASCII cell as "_" on the way to the browser (diagnosed on
-              # jg-jiahd 2026-08-11). Fixed at the image level too (LANG +
-              # `tmux -u`), but set here as well so it holds on any tag
-              # predating that and regardless of what the image ships.
+              # non-ASCII cell as "_" on the way to the browser, which is how
+              # Traditional Chinese reached cc.jiahd.cc as rows of underscores
+              # (2026-08-11). Fixed at the image level too (LANG + `tmux -u`),
+              # but set here as well so it holds on any tag predating that and
+              # regardless of what the image ships.
               LANG: C.UTF-8
               # OIDC mode: the oauth2-proxy sidecar is the only way in --
               # ttyd binds loopback and requires the email header the proxy
@@ -241,21 +249,28 @@ spec:
     kind: OCIRepository
     name: claude-code
   interval: 1h
+  # With replicas at 0 no pod ever schedules, and a WaitForFirstConsumer storage
+  # class binds a PVC only when one does — so Helm waiting for these claims to
+  # bind would time out and fail the release permanently. Immediate binding
+  # (what an NFS class does) hides this; local-path exposes it. Harmless when
+  # the instance is always on, so it is not made conditional.
+  install:
+    disableWait: true
+  upgrade:
+    disableWait: true
   values:
     controllers:
       im:
         strategy: Recreate
-        # Client remote-support terminal: off by default. Scale to 1 only
-        # while actively supporting this client, to minimize the standing
-        # exposure window of a LAN-facing root shell with network-scanning
-        # capability and cluster-admin RBAC (see rbac.yaml in the jg-base
-        # claudecode app).
+        # A LAN-facing root shell with network-scanning capability and
+        # cluster-admin RBAC (see rbac.yaml in the jg-base claudecode app), so
+        # it is off unless the cluster asks for it: scale to 1 only while
+        # actively supporting this client.
         #
-        # jcom deviates for "im" only, which is pinned to 1 so it stays
-        # reachable at im.${SECRET_DOMAIN} without a manual `kubectl scale`
-        # that Flux keeps resetting to 0. "cc" keeps the upstream default of
-        # 0 and is still scaled by hand when needed. User-confirmed
-        # 2026-08-12.
+        # Declared rather than scaled by hand. A `kubectl scale` survives until
+        # the next reconcile and then vanishes, which reads as an outage with no
+        # cause — jgt-omni lost its terminal exactly that way on 2026-08-12, and
+        # jg-jiahd carries a hand-edited copy of this file for the same reason.
         replicas: 1
         serviceAccount:
           name: claude-code # shared SA, RBAC bound in jg-base claudecode app
@@ -275,10 +290,11 @@ spec:
               CLAUDE_CONFIG_DIR: /home/claude/.claude
               # tmux asks the locale whether an attaching client can take
               # UTF-8; with LANG unset it decides no and rewrites every
-              # non-ASCII cell as "_" on the way to the browser (diagnosed on
-              # jg-jiahd 2026-08-11). Fixed at the image level too (LANG +
-              # `tmux -u`), but set here as well so it holds on any tag
-              # predating that and regardless of what the image ships.
+              # non-ASCII cell as "_" on the way to the browser, which is how
+              # Traditional Chinese reached cc.jiahd.cc as rows of underscores
+              # (2026-08-11). Fixed at the image level too (LANG + `tmux -u`),
+              # but set here as well so it holds on any tag predating that and
+              # regardless of what the image ships.
               LANG: C.UTF-8
               # OIDC mode: the oauth2-proxy sidecar is the only way in --
               # ttyd binds loopback and requires the email header the proxy

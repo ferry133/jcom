@@ -92,14 +92,74 @@ spec:
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
-    # ── jcom-only Cilium override (this single-node cluster HOSTS Omni) ──────────
-    # Global jg-base Cilium uses vxlan tunnel + MTU 1370 for KubeSpan multi-node
-    # clusters. On jcom that 1370 pod-MTU is too small for Omni's SideroLink
-    # WireGuard → "sendmmsg: message too long" → Omni UI / kubectl go slow.
-    # jcom needs no KubeSpan (single node) → revert Cilium to native + MTU 1500.
-    # JSON6902 append (NOT strategic-merge): appends to the `cilium` child
-    # Kustomization's spec.patches so the generic HR-strategy patch above is kept
-    # (a 2nd strategic-merge would REPLACE the whole patches list — verified).
+#| Base apps that cannot function under this cluster's shape are suspended here.
+   jg-base lists every base app unconditionally — Flux cannot decline to create a
+   Kustomization from that side — so the decision has to be expressed from the
+   per-user repo. This is generated from cluster.yaml rather than hand-written
+   into the rendered file, so it stays visible as configuration instead of
+   becoming drift.
+
+   Scalar-only strategic merge: it sets `suspend` and nothing else, so the
+   generic HelmRelease-strategy patch above survives. A second patch that set
+   `spec.patches` would replace that list wholesale. #|
+#% set _disabled = [] %#
+#% if storage_backend != 'nfs' %#
+#|   nfs-subdir provisions from a NAS this cluster does not have. #|
+#% set _ = _disabled.append(('nfs-client-provisioner', 'storage_backend is ' ~ storage_backend ~ ', so there is no NAS to provision from')) %#
+#% endif %#
+#% if storage_backend != 'replicated' %#
+#|   Longhorn is heavier than the other provisioners and, unlike them, does not
+     work at all until every node carries the iscsi-tools and util-linux-tools
+     Talos extensions — which no manifest can install. #|
+#% set _ = _disabled.append(('longhorn', 'storage_backend is ' ~ storage_backend ~ '; replicated storage also needs Talos system extensions on every node')) %#
+#% endif %#
+#% if not deploy_k8s_gateway %#
+#|   k8s-gateway is the only thing that answers internal names — Cloudflare
+     will not publish RFC1918 addresses (D29), so there is no public-DNS path
+     to fall back from. Disable it only where the cluster has its own resolver
+     serving those names. #|
+#% set _ = _disabled.append(('k8s-gateway', 'this cluster declares it resolves internal names by other means')) %#
+#% endif %#
+#% if deployment_profile != 'appliance' %#
+#|   Only an appliance is expected to land on a LAN nobody has surveyed. Every
+     other profile declares its addresses in cluster.yaml, and a probe writing a
+     second pool there would overlap the declared one. #|
+#% set _ = _disabled.append(('lan-address-probe', 'this profile declares its LAN addresses in cluster.yaml, so there is nothing to discover')) %#
+#% endif %#
+#% if is_single_node %#
+#|   Spegel is a peer-to-peer image mirror; with no peers its router never
+     bootstraps, the pod never becomes ready, and it still rewrites every
+     registry to a local port that nothing answers. #|
+#% set _ = _disabled.append(('spegel', 'single-node cluster: a peer-to-peer image mirror has no peers')) %#
+#% endif %#
+#% for name, why in _disabled %#
+    # suspended: #{ why }#
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: #{ name }#
+          namespace: flux-system
+        spec:
+          suspend: true
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: #{ name }#
+#% endfor %#
+#% if cilium_native_routing | default(false) %#
+#| Cilium native routing instead of the default vxlan tunnel. Needed by a
+   cluster that hosts Omni: SideroLink carries WireGuard over the pod network,
+   and vxlan's 1370-byte pod MTU is too small for it — the tunnel fails with
+   `sendmmsg: message too long` and Omni's UI and kubectl crawl. Removing the
+   encapsulation allows MTU 1500 and makes DSR usable, which vxlan does not
+   support.
+
+   JSON6902 append, not strategic merge: appending to the cilium child
+   Kustomization's `spec.patches` preserves the generic HelmRelease-strategy
+   patch above. A second strategic merge would replace that list wholesale —
+   verified on jcom, which is where this override comes from. #|
+    # native routing: this cluster hosts Omni and SideroLink needs MTU 1500
     - patch: |-
         - op: add
           path: /spec/patches/-
@@ -112,7 +172,7 @@ spec:
               spec:
                 values:
                   routingMode: native
-                  ipv4NativeRoutingCIDR: "10.42.0.0/16"
+                  ipv4NativeRoutingCIDR: "#{ cluster_pod_cidr }#"
                   autoDirectNodeRoutes: true
                   MTU: 1500
                   loadBalancer:
@@ -125,27 +185,7 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: cilium
-    # ── jcom-only: disable Spegel (single-node cluster) ─────────────────────────
-    # Spegel is a peer-to-peer image mirror — pointless on 1 node, and the
-    # cluster-template disables it for single-node (spegel_enabled = nodes > 1).
-    # jg-base deploys it unconditionally; on jcom it never became Ready and, before
-    # dying, wrote /etc/cri/conf.d/hosts/_default/hosts.toml mirroring ALL registries
-    # to dead :29999/:30021 → every uncached image pull failed cluster-wide.
-    # Suspend the spegel child Kustomization so Flux stops reconciling/recreating it.
-    # (Scalar-only strategic merge: does NOT set spec.patches, so the generic
-    # HR-strategy patch above is preserved.)
-    - patch: |-
-        apiVersion: kustomize.toolkit.fluxcd.io/v1
-        kind: Kustomization
-        metadata:
-          name: spegel
-          namespace: flux-system
-        spec:
-          suspend: true
-      target:
-        group: kustomize.toolkit.fluxcd.io
-        kind: Kustomization
-        name: spegel
+#% endif %#
 ---
 # ── claude-code instances (base; per-cluster rendered from claude_instances) ──
 # The shared pieces (namespace, SA/RBAC, OCIRepository, secrets) come from
@@ -174,11 +214,21 @@ spec:
         kind: Secret
   dependsOn:
     - name: cluster-apps-base
-#| claudecode/claude-code and monitoring/daily-check moved from extras to base
-   (2026-08-07); the filter below skips them so a per-user cluster.yaml that
-   still lists either does not render a Kustomization pointing at a jg-base
-   path that no longer exists. #|
-#% set _now_base = ['claudecode/claude-code', 'monitoring/daily-check'] %#
+#| Apps that graduated from extras to base. The filter skips them so a per-user
+   cluster.yaml that still lists one does not render a Kustomization pointing at
+   a jg-base path that no longer exists.
+
+     claudecode/claude-code, monitoring/daily-check     2026-08-07
+     storage/local-path-provisioner                     2026-08-11
+
+   local-path is not the alternative to NFS — it is the node-local tier, and a
+   cluster with a NAS still needs one (Postgres on NFS is wrong on fsync and
+   lock semantics regardless of NAS size). So it is installed everywhere and
+   never suspended, and `storage_backend` only decides which class is default.
+
+   storage/nfs-subdir is likewise a base app, but it IS conditional, so it is
+   disabled by the suspend patch on cluster-apps-base above rather than here. #|
+#% set _now_base = ['claudecode/claude-code', 'monitoring/daily-check', 'storage/local-path-provisioner'] %#
 #% for extra in extras | default([]) if extra not in _now_base %#
 #% set _app = extra.split('/')[1] %#
 ---

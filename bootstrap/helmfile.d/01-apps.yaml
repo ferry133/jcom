@@ -19,7 +19,6 @@ releases:
     values: ['./templates/values.yaml.gotmpl']
     needs: ['kube-system/cilium']
 
-
   - name: cert-manager
     namespace: cert-manager
     chart: oci://quay.io/jetstack/charts/cert-manager

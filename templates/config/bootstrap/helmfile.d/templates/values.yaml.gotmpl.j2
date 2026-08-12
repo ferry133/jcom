@@ -7,5 +7,5 @@
 {{- $values = mergeOverwrite $values (dict "instance" (dict "sync" (dict "url" "https://github.com/#{ repository_name }#.git"))) -}}
 {{- end -}}
 {{- $yaml := $values | toYaml -}}
-{{- $yaml = $yaml | replace "${COREDNS_CLUSTER_IP}" "#{ coredns_cluster_ip | default('10.96.0.10') }#" -}}
+{{- $yaml = $yaml | replace "${COREDNS_CLUSTER_IP}" "#{ coredns_cluster_ip }#" -}}
 {{ $yaml }}

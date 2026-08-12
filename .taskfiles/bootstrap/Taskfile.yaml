@@ -4,7 +4,7 @@ version: '3'
 tasks:
 
   talos:
-    desc: Bootstrap the Talos cluster
+    desc: Bootstrap the Talos cluster (manual provisioning path only)
     dir: '{{.TALOS_DIR}}'
     cmds:
       - '[ -f talsecret.sops.yaml ] || talhelper gensecret | sops --filename-override talos/talsecret.sops.yaml --encrypt /dev/stdin > talsecret.sops.yaml'
@@ -13,9 +13,10 @@ tasks:
       - until talhelper gencommand bootstrap | bash; do sleep 10; done
       - until talhelper gencommand kubeconfig --extra-flags="{{.ROOT_DIR}} --force" | bash; do sleep 10; done
     preconditions:
+      - msg: talos/talconfig.yaml not found — the manual path needs `task configure` with nodes.yaml filled in
+        sh: test -f {{.TALOS_DIR}}/talconfig.yaml
       - test -f {{.ROOT_DIR}}/.sops.yaml
       - test -f {{.SOPS_AGE_KEY_FILE}}
-      - test -f {{.TALOS_DIR}}/talconfig.yaml
       - which talhelper talosctl sops
 
   apps:

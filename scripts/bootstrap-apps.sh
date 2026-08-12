@@ -27,15 +27,11 @@ function wait_for_nodes() {
 function apply_namespaces() {
     log debug "Applying namespaces"
 
-    local -r apps_dir="${ROOT_DIR}/kubernetes/apps"
+    # Base namespaces from jg-base/kubernetes/apps/base/ — not present in per-user repo.
+    # Extras namespaces (e.g. claude-code) are created by Flux on first reconcile.
+    local -ra namespaces=(cert-manager default flux-system kube-system network storage)
 
-    if [[ ! -d "${apps_dir}" ]]; then
-        log error "Directory does not exist" "directory=${apps_dir}"
-    fi
-
-    for app in "${apps_dir}"/*/; do
-        namespace=$(basename "${app}")
-
+    for namespace in "${namespaces[@]}"; do
         # Check if the namespace resources are up-to-date
         if kubectl get namespace "${namespace}" &>/dev/null; then
             log info "Namespace resource is up-to-date" "resource=${namespace}"
@@ -141,8 +137,29 @@ function sync_helm_releases() {
 }
 
 function main() {
-    check_env KUBECONFIG TALOSCONFIG
-    check_cli helmfile kubectl kustomize sops talhelper yq
+    check_env KUBECONFIG
+    check_cli helmfile kubectl kustomize sops yq
+
+    # Prerequisites that belong to one provisioning path must not gate the other.
+    # The path is read from cluster.yaml rather than inferred from which files
+    # happen to exist: nodes.yaml is materialised for every repo, so its presence
+    # proves nothing, and a leftover talos/ directory would mislead too.
+    local provisioning_path
+    provisioning_path="$(yq --exit-status '.provisioning_path' "${ROOT_DIR}/cluster.yaml" 2>/dev/null || true)"
+    case "${provisioning_path}" in
+        omni)
+            log debug "Omni provisioning path, skipping talhelper prerequisites"
+            ;;
+        talos)
+            # The manual path is driven by talhelper against a generated talosconfig.
+            check_env TALOSCONFIG
+            check_cli talhelper
+            ;;
+        *)
+            log error "cluster.yaml must declare provisioning_path" \
+                "value=${provisioning_path:-<unset>}" "expected=omni|talos"
+            ;;
+    esac
 
     # Apply resources and Helm releases
     wait_for_nodes
