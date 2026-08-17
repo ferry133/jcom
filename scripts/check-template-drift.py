@@ -12,6 +12,14 @@ So this reports three things, and the third is the one people forget:
   DRIFTED    the file differs — an exception, or an edit nobody wrote down
   BEHIND     the file is missing locally — this repo will not get the feature
   EXTRA      the file exists only locally — a whole addition to account for
+  MODE       same bytes, different permission bit
+
+MODE is here because content equality was not enough and the gap had already
+cost something. makejinja renders with `copy_metadata = true`, so a template's
+mode lands on its output: jcom's `.sops.yaml.j2` was byte-identical to this
+repo's and mode 755 against 644, which flipped the rendered `.sops.yaml` to 755
+on every `task configure`. This script reported `ok` throughout, because bytes
+were all it read — a clean result from a check that was not looking.
 
 Usage:  ./scripts/check-template-drift.py <cluster-repo> [template-repo]
 Exit 0 if the cluster matches, 1 if anything drifted or is missing.
@@ -70,6 +78,14 @@ def main() -> int:
         for p in theirs & ours
         if (template / p).read_bytes() != (cluster / p).read_bytes()
     )
+    # Only for files whose bytes match — a drifted file's mode is noise next to
+    # its content, and reporting both would double-count one divergence.
+    mode_only = sorted(
+        p
+        for p in theirs & ours
+        if (template / p).read_bytes() == (cluster / p).read_bytes()
+        and ((template / p).stat().st_mode & 0o111) != ((cluster / p).stat().st_mode & 0o111)
+    )
     behind = sorted(ours - theirs)
     extra = sorted(theirs - ours)
 
@@ -81,11 +97,22 @@ def main() -> int:
         ("DRIFTED", [(p, f"{n} changed lines") for p, n in drifted]),
         ("BEHIND ", [(p, "missing locally") for p in behind]),
         ("EXTRA  ", [(p, "not in template") for p in extra]),
+        (
+            "MODE   ",
+            [
+                (
+                    p,
+                    f"same bytes, {(template / p).stat().st_mode & 0o777:o}"
+                    f" here vs {(cluster / p).stat().st_mode & 0o777:o} there",
+                )
+                for p in mode_only
+            ],
+        ),
     ):
         for path, note in rows:
             print(f"  {label}  {path}  ({note})")
 
-    total = len(drifted) + len(behind) + len(extra)
+    total = len(drifted) + len(behind) + len(extra) + len(mode_only)
     if not total:
         print("ok — this cluster's templates match the template repo")
         return 0
