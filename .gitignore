@@ -4,6 +4,11 @@
 *.decrypted~*.yaml
 /age.key
 /cloudflare-tunnel.json
+# Dated backups made when rotating the tunnel. Untracked-but-not-ignored
+# is the dangerous state in a public repo: one `git add -A` publishes a
+# TunnelSecret permanently, and untracking it afterwards does not
+# unpublish it.
+/cloudflare-tunnel.json.*
 /auth0.json
 /github-deploy.key
 /github-deploy.key.pub
@@ -11,6 +16,9 @@
 # Template config files
 /cluster.yaml
 /nodes.yaml
+/config.gen/cloudflare-tunnel.json
+/config.gen/cluster.yaml
+/config.gen/nodes.yaml
 /trello-notifier.yaml
 # Kubernetes
 kubeconfig

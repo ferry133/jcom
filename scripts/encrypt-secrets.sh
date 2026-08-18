@@ -48,6 +48,15 @@ is_encrypted() {
     [ "$(sops filestatus "$1" 2>/dev/null | jq -r '.encrypted' 2>/dev/null)" = "true" ]
 }
 
+# awk, not `sed '1{/^---$/d}'`: BSD sed rejects that form with "extra
+# characters at the end of d command", and it fails inside a pipeline whose
+# stderr the caller discards -- so the comparison silently produced nothing and
+# every file fell through to re-encryption. The first version of this fix was
+# exactly that, and only a real render caught it.
+strip_doc_marker() {
+    awk 'NR==1 && $0=="---"{next}{print}'
+}
+
 # Directories in, files found here. Taking a pre-built list as arguments meant
 # the caller had to interpolate newline-separated paths into a command line,
 # where the shell reads each newline as a command separator.
@@ -80,10 +89,23 @@ while IFS= read -r -d '' file; do
                 # the same yq makes them equal when the content is equal, and
                 # comments survive the round trip so a comment-only edit still
                 # counts as a change.
+                # `strip_doc_marker` on both sides, and it is load-bearing.
+                # makejinja renders these files with a leading `---` document
+                # marker; `sops --decrypt` returns the same document without
+                # one, and `yq -P` faithfully preserves the difference. Four
+                # bytes, present on every render, so every file compared as
+                # changed and #7's churn survived its own fix -- measured on
+                # jcom 2026-08-18, where sops-age.sops.yaml re-encrypted on a
+                # run whose plaintext was byte-identical.
+                #
+                # This did not show up in the original tests because those
+                # fixtures were hand-written and encrypted with sops, so both
+                # sides of the comparison had been through sops. The renderer
+                # was never in the loop. The test was right; the inputs were not.
                 head_plain="$tmpdir/plain-$(basename "$file")"
-                if sops --decrypt "$head_copy" 2>/dev/null | yq -P '.' > "$head_plain" 2>/dev/null \
+                if sops --decrypt "$head_copy" 2>/dev/null | yq -P '.' | strip_doc_marker > "$head_plain" 2>/dev/null \
                    && [ -s "$head_plain" ] \
-                   && yq -P '.' "$file" 2>/dev/null | cmp -s - "$head_plain"; then
+                   && yq -P '.' "$file" 2>/dev/null | strip_doc_marker | cmp -s - "$head_plain"; then
                     # Same plaintext. Keep the committed ciphertext so the file
                     # does not appear in `git status` at all.
                     cat "$head_copy" > "$file"
