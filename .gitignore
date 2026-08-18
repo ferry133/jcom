@@ -21,7 +21,7 @@
 /config.gen/nodes.yaml
 /trello-notifier.yaml
 # Kubernetes
-kubeconfig
+kubeconfig*
 talosconfig
 # Misc.
 .private/
@@ -31,4 +31,6 @@ talosconfig
 Thumbs.db
 config.gen/cluster.yaml
 config.gen/nodes.yaml
-priv-key.asc
+# Any armored key. pub-key.asc stays tracked because gitignore does not affect
+# already-tracked files -- it is a public key and that is deliberate.
+*.asc
