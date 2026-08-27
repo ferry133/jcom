@@ -137,7 +137,25 @@ class Plugin(makejinja.plugin.Plugin):
         # These must match the defaults documented in cluster.sample.yaml —
         # a documented default the code does not apply is a defect.
         data.setdefault('node_default_gateway', nthhost(data.get('node_cidr'), 1))
-        data.setdefault('node_dns_servers', ['1.1.1.1', '1.0.0.1'])
+        # 2026-08-27: the LAN's router, not Cloudflare. A node pinned to a
+        # public resolver cannot resolve `internal.<domain>` at all -- that name
+        # is deliberately never published publicly -- so everything running on
+        # this node got NXDOMAIN for every internal name, including the `im`
+        # rescue terminal. Measured here: `dig @10.43.0.10 internal.janncot.com`
+        # was NXDOMAIN while `dig @10.9.8.1 internal.janncot.com` returned
+        # 10.9.8.4, and `dig @1.1.1.1 github.com` answered (so the node's path
+        # was working, it was just pointed at somewhere that has no such record).
+        #
+        # Single entry, deliberately -- a public fallback would make CoreDNS
+        # pick between upstreams at random (its forward plugin's default policy)
+        # and internal names would resolve on roughly half of all queries.
+        #
+        # Mirrors ferry133/jg-cluster-template#29. Applied here as a one-line
+        # change rather than by syncing this copy: templates/ in this repo has
+        # drifted ~890 lines from upstream, and pulling all of it in would be a
+        # template upgrade wearing a DNS fix's clothes. The drift is real and
+        # tracked separately; it is not this change's to resolve.
+        data.setdefault('node_dns_servers', [data['node_default_gateway']])
         data.setdefault('node_ntp_servers', ['162.159.200.1', '162.159.200.123'])
         data.setdefault('cluster_pod_cidr', '10.42.0.0/16')
         # cluster_svc_cidr is required (no default) — see cluster.schema.cue.
