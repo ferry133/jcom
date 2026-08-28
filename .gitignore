@@ -34,3 +34,9 @@ config.gen/nodes.yaml
 # Any armored key. pub-key.asc stays tracked because gitignore does not affect
 # already-tracked files -- it is a public key and that is deliberate.
 *.asc
+
+# 2026-08-28: omniconfig.yaml 在磁碟上、未追蹤、而且沒有任何規則涵蓋它——這個 repo
+# 是 PUBLIC，一次 `git add -A` 就會把 Omni 憑證推出去。jg-cluster-template 與
+# jg-jiahd 的 .gitignore 都有 omniconfig*，這裡漏了。用 glob 不用精確檔名：
+# 同一份檔案的第 32 行就是「規則寫死路徑、檔案在別的目錄」那次外洩留下的補丁。
+omniconfig*
