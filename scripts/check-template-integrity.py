@@ -7,9 +7,15 @@ Both defect classes this catches were found in this repo by hand:
     referenced an undefined TEMPLATE_NODE_CONFIG_FILE for months)
   - a field whose schema default disagrees with the render-time default
     (cluster_svc_cidr was 10.43.0.0/16 in CUE and 10.96.0.0/16 in plugin.py)
+  - a `db_storage_class` naming a class this cluster will not install
+    (ferry133/jg-cluster-template#1)
 
-Neither is visible by reading a single file, so check them instead of
+None is visible by reading a single file, so check them instead of
 rediscovering them later.
+
+Three outcomes, not two: `ok`, `FAIL`, and `skip` for a check whose subject is
+not present. A check that cannot see what it is checking must not print the same
+word as one that looked and found nothing wrong.
 
 Usage: check-template-integrity.py [repo-root]
 """
@@ -27,6 +33,151 @@ TASK_BUILTINS = {
     "CLI_FORCE", "CLI_SILENT", "CLI_VERBOSE", "CLI_OFFLINE", "ITEM", "EXIT_CODE",
     "USER_WORKING_DIR", "ALIAS", "TASK_EXE", "CHECKSUM", "TIMESTAMP", "DATE",
 }
+
+
+# Storage classes this repository installs, and what has to be true for each.
+# Anything not named here is left alone: a cluster may have a CSI class this
+# repo has never heard of, and refusing those would be wrong more often than the
+# bug it prevents (ferry133/jg-cluster-template#1).
+#
+# `local-path` needs no entry — local-path-provisioner is a base app everywhere.
+
+
+class CannotCheck(Exception):
+    """The check's subject is not present, so nothing was measured.
+
+    Distinct from finding no problems. Raised rather than returning an empty
+    list because those two print the same word otherwise, which is the defect
+    this file exists to catch.
+    """
+
+
+def top_level(path: Path) -> dict[str, str]:
+    """Top-level `key: value` scalars from a cluster.yaml, as raw strings.
+
+    Regex rather than a YAML parser to stay dependency-free, like the rest of
+    this file. Only column-zero keys are collected, so nested mappings and list
+    items cannot be mistaken for top-level fields, and commented lines are
+    ignored. Values keep their raw text — quote stripping and boolean
+    interpretation are the caller's business, and doing them here would hide
+    the difference between `false` and `"false"`.
+    """
+    found: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        m = re.match(r"^([a-z_][a-z0-9_]*):[ \t]*(.*?)[ \t]*$", line)
+        if m and not m.group(1).startswith("#"):
+            found[m.group(1)] = strip_comment(m.group(2))
+    return found
+
+
+def strip_comment(value: str) -> str:
+    """Drop a trailing `# ...` the way YAML does.
+
+    Not cosmetic. A real cluster.yaml in this fleet carries
+    `storage_backend: "local-path"   # single node, no NAS`, and without this the
+    value compares unequal to every name it should match — which would fail a
+    correct configuration and, worse, would have looked like the check working.
+    Found by running against the live repos rather than against the fixture list,
+    which had no commented values in it because none were imagined.
+    """
+    v = value.strip()
+    if v[:1] in ('"', "'"):
+        end = v.find(v[0], 1)
+        return v if end == -1 else v[:end + 1]
+    return v.split(" #", 1)[0].split("\t#", 1)[0].strip()
+
+
+def unquote(raw: str) -> str:
+    return raw.strip().strip('"').strip("'")
+
+
+def yaml_bool(raw: str) -> bool | None:
+    """`true`/`false` only. None for anything else, including YAML 1.1's
+    `yes`/`no`/`on`/`off` — guessing at those here would be a second opinion
+    about what the renderer does, and two opinions is the divergence this file
+    checks for elsewhere."""
+    v = unquote(raw).lower()
+    return True if v == "true" else False if v == "false" else None
+
+
+def check_db_storage_class(root: Path) -> tuple[list[str], list[str]]:
+    """`db_storage_class` must name a class this cluster will actually have.
+
+    The schema accepts any non-empty string and plugin.py only `setdefault`s it,
+    so `db_storage_class: "longhorn"` on a cluster without Longhorn renders, vets
+    clean, and leaves a PVC `Pending` forever. There is no failure signal: the
+    Kustomization goes Ready, and the symptom is one pod that never starts.
+
+    Deliberately mirrors plugin.py's derivation rather than restating the rule.
+    The issue that asked for this described it as "replicated_storage: true OR
+    storage_backend: replicated", and that is not what the renderer does: an
+    explicit `replicated_storage: false` wins over `storage_backend:
+    "replicated"`, so that combination installs no Longhorn. A check that
+    disagreed with the renderer in that corner would pass exactly the config
+    that breaks.
+    """
+    cfg_path = root / "cluster.yaml"
+    if not cfg_path.is_file():
+        raise CannotCheck(
+            "no cluster.yaml here — this is the template repo, which has no "
+            "cluster to check. In a per-user repo `task configure` requires it, "
+            "so this cannot be the silent-skip case"
+        )
+
+    cfg = top_level(cfg_path)
+    problems: list[str] = []
+    warnings: list[str] = []
+
+    # Absent means plugin.py's setdefault applies, which is local-path.
+    db_class = unquote(cfg.get("db_storage_class", "local-path"))
+    backend = unquote(cfg.get("storage_backend", ""))
+
+    if db_class == "longhorn":
+        if "replicated_storage" in cfg:
+            declared = yaml_bool(cfg["replicated_storage"])
+            if declared is None:
+                warnings.append(
+                    f"replicated_storage is {cfg['replicated_storage']!r}, which "
+                    "this check reads as neither true nor false, so whether "
+                    "Longhorn is installed was not determined here. "
+                    "`task configure` runs `cue vet` after this and will reject it"
+                )
+                installed = None
+            else:
+                installed = declared
+        else:
+            installed = backend == "replicated"
+
+        if installed is False:
+            missing = (
+                "replicated_storage is declared false, which overrides "
+                f"storage_backend: {backend!r}"
+                if yaml_bool(cfg.get("replicated_storage", "")) is False
+                else f"neither replicated_storage: true nor storage_backend: "
+                     f'"replicated" is set (storage_backend is {backend!r})'
+            )
+            problems.append(
+                f"db_storage_class is \"longhorn\" but {missing}, so no Longhorn "
+                "is installed. The database PVC would sit Pending forever with "
+                "every Kustomization reporting Ready"
+            )
+
+    elif db_class == "sc-nas":
+        if backend != "nfs":
+            problems.append(
+                f'db_storage_class is "sc-nas" but storage_backend is {backend!r}, '
+                "so nfs-client-provisioner is suspended and nothing provides that "
+                "class. The database PVC would sit Pending forever"
+            )
+        else:
+            warnings.append(
+                'db_storage_class is "sc-nas": the database is on NFS, which is '
+                "never a correct answer for something that needs fsync durability "
+                "and file locking. This is the un-migrated state, not a choice — "
+                "see fleet-ops docs/operations/db-storage-migration.md"
+            )
+
+    return problems, warnings
 
 
 def taskfiles(root: Path) -> list[Path]:
@@ -71,10 +222,10 @@ def declared_vars(path: Path) -> set[str]:
     return names
 
 
-def check_dangling_vars(root: Path) -> list[str]:
+def check_dangling_vars(root: Path) -> tuple[list[str], list[str]]:
     files = taskfiles(root)
     if not files:
-        return ["no Taskfile.yaml found — wrong repo root?"]
+        return ["no Taskfile.yaml found — wrong repo root?"], []
 
     defined = set(TASK_BUILTINS)
     for f in files:
@@ -89,7 +240,7 @@ def check_dangling_vars(root: Path) -> list[str]:
                 if name not in defined:
                     rel = f.relative_to(root)
                     problems.append(f"{rel}:{lineno}: {{{{.{name}}}}} is never defined")
-    return problems
+    return problems, []
 
 
 def cue_defaults(path: Path) -> dict[str, str]:
@@ -125,11 +276,11 @@ def plugin_defaults(path: Path) -> dict[str, str | None]:
     return found
 
 
-def check_divergent_defaults(root: Path) -> list[str]:
+def check_divergent_defaults(root: Path) -> tuple[list[str], list[str]]:
     cue_path = root / ".taskfiles/template/resources/cluster.schema.cue"
     plugin_path = root / "templates/scripts/plugin.py"
     if not cue_path.is_file() or not plugin_path.is_file():
-        return [f"missing {cue_path.name} or {plugin_path.name} — wrong repo root?"]
+        return [f"missing {cue_path.name} or {plugin_path.name} — wrong repo root?"], []
 
     schema = cue_defaults(cue_path)
     render = plugin_defaults(plugin_path)
@@ -146,10 +297,10 @@ def check_divergent_defaults(root: Path) -> list[str]:
             problems.append(
                 f"{field}: schema defaults to {want!r} but plugin.py defaults to {got!r}"
             )
-    return problems
+    return problems, []
 
 
-def check_documented_defaults(root: Path) -> list[str]:
+def check_documented_defaults(root: Path) -> tuple[list[str], list[str]]:
     """Commented-out fields in the sample must show the default actually applied.
 
     Only literal defaults are checked; a computed default has no single value to
@@ -157,8 +308,24 @@ def check_documented_defaults(root: Path) -> list[str]:
     """
     sample = root / "cluster.sample.yaml"
     plugin_path = root / "templates/scripts/plugin.py"
-    if not sample.is_file() or not plugin_path.is_file():
-        return []
+    # Raise, do not return clean. This check used to `return [], []` when either
+    # file was missing, which prints `ok` — the same word as a sample that was
+    # read and found correct. Measured three ways: present-and-correct → ok,
+    # present-and-wrong → FAIL, ABSENT → ok. Two of those three are the same
+    # word for different facts, which is the thing this file's own docstring
+    # forbids in its opening paragraph.
+    #
+    # It is not hypothetical. `jg-janncotcc` deleted its cluster.sample.yaml on
+    # purpose ("only a maintainer reads this, and this is the customer's repo"),
+    # and removing it from the other user repos is under consideration. Every
+    # one of them would print `ok documented defaults` forever afterwards.
+    missing = [f.name for f in (sample, plugin_path) if not f.is_file()]
+    if missing:
+        raise CannotCheck(
+            f"{', '.join(missing)} not here — nothing to compare. A user repo "
+            "may drop cluster.sample.yaml deliberately; the template repo never "
+            "should, so an absent sample HERE is a finding, not a skip"
+        )
 
     render = plugin_defaults(plugin_path)
     problems = []
@@ -177,7 +344,7 @@ def check_documented_defaults(root: Path) -> list[str]:
                 f"cluster.sample.yaml:{lineno}: {field} is documented as {shown!r} "
                 f"but omitting it yields {actual!r}"
             )
-    return problems
+    return problems, []
 
 
 def main() -> int:
@@ -187,18 +354,29 @@ def main() -> int:
         ("dangling task variables", check_dangling_vars),
         ("divergent defaults", check_divergent_defaults),
         ("documented defaults", check_documented_defaults),
+        ("db_storage_class is installable", check_db_storage_class),
     )
 
     failed = False
     for label, check in checks:
-        problems = check(root)
+        try:
+            problems, warnings = check(root)
+        except CannotCheck as why:
+            # Not "ok": nothing was measured. Not a failure either, when the
+            # subject is absent by design rather than by accident.
+            print(f"skip  {label} — {why}")
+            continue
+
         if problems:
             failed = True
             print(f"FAIL  {label}", file=sys.stderr)
-            for p in problems:
-                print(f"        {p}", file=sys.stderr)
+            for problem in problems:
+                print(f"        {problem}", file=sys.stderr)
         else:
             print(f"ok    {label}")
+        for warning in warnings:
+            print(f"warn  {label}")
+            print(f"        {warning}")
 
     return 1 if failed else 0
 

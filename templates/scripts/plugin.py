@@ -2,6 +2,8 @@ from pathlib import Path
 from typing import Any
 
 import base64
+import hashlib
+import hmac
 import ipaddress
 import makejinja
 import re
@@ -117,6 +119,53 @@ def github_push_token(file_path: str = 'github-push-token.txt') -> str:
         raise RuntimeError(f"Unexpected error while reading {file_path}: {e}")
 
 
+# Return the shared claude-code Auth0 application's fields from auth0.json
+#
+# A local file rather than cluster.yaml fields because this template repo is
+# public and every cluster fronts claude-code with the same Auth0 application:
+# one copied file per cluster directory beats pasting the same client secret
+# into twenty configs. Same idiom as cloudflare-tunnel.json — gitignored, read
+# at render time, never committed.
+#
+# Missing here is a hard stop, not an empty default: OIDC mode gives ttyd no
+# fallback (it binds loopback), so a cluster rendered with a blank client
+# secret deploys a terminal nobody can reach.
+def auth0_config(file_path: str = 'auth0.json') -> dict[str, str]:
+    try:
+        with open(file_path, 'r') as file:
+            data = json.load(file)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"File not found: {file_path} — claude-code defaults to Auth0 login. "
+            f"Copy auth0.json from another cluster directory, or set "
+            f"`claudecode_auth0: false` in cluster.yaml to use ttyd basic auth.")
+    except json.JSONDecodeError:
+        raise ValueError(f"Could not decode JSON file: {file_path}")
+
+    missing = [k for k in ('domain', 'client_id', 'client_secret')
+               if not data.get(k)]
+    if missing:
+        raise KeyError(f"Missing or empty in {file_path}: {', '.join(missing)}")
+    return data
+
+
+# Derive oauth2-proxy's cookie secret from the cluster's own age key
+#
+# Derived rather than generated so it is stable: a fresh random value on every
+# render would sign every session out at each `task configure` and rewrite the
+# encrypted secret for no reason. Derived rather than shared so a cookie minted
+# for one cluster cannot be replayed at another — jg-jiahd and jgtest were
+# hand-copied the same value, which is the mistake this closes.
+#
+# 32 bytes, base64url — the one length oauth2-proxy accepts besides 16 and 24.
+def oauth2_cookie_secret(cluster_name: str, file_path: str = 'age.key') -> str:
+    key = age_key('private', file_path)
+    digest = hmac.new(key.encode('utf-8'),
+                      f"claudecode-oauth2-cookie:{cluster_name}".encode('utf-8'),
+                      hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode('utf-8')
+
+
 # Return a list of files in the talos patches directory
 def talos_patches(value: str) -> list[str]:
     path = Path(f'templates/config/talos/patches/{value}')
@@ -137,25 +186,107 @@ class Plugin(makejinja.plugin.Plugin):
         # These must match the defaults documented in cluster.sample.yaml —
         # a documented default the code does not apply is a defect.
         data.setdefault('node_default_gateway', nthhost(data.get('node_cidr'), 1))
-        # 2026-08-27: the LAN's router, not Cloudflare. A node pinned to a
-        # public resolver cannot resolve `internal.<domain>` at all -- that name
-        # is deliberately never published publicly -- so everything running on
-        # this node got NXDOMAIN for every internal name, including the `im`
-        # rescue terminal. Measured here: `dig @10.43.0.10 internal.janncot.com`
-        # was NXDOMAIN while `dig @10.9.8.1 internal.janncot.com` returned
-        # 10.9.8.4, and `dig @1.1.1.1 github.com` answered (so the node's path
-        # was working, it was just pointed at somewhere that has no such record).
+        # 2026-08-27: the LAN's router, not Cloudflare. Measured on jg-jiahd
+        # (Omni path, no Talos patches applied) that the nodes were already on
+        # `10.9.9.1` via DHCP while this file rendered `1.1.1.1` -- so the old
+        # default was, on half the fleet, a statement about a file nobody
+        # applies. On the other half (patches applied, e.g. jcom) it was real,
+        # and it is what stopped those nodes from resolving internal names at
+        # all: a node on `1.1.1.1` asks Cloudflare, which does not serve the
+        # RFC1918 answer (deployment-profiles D29), so `internal.<domain>`
+        # is NXDOMAIN from anything running on that node -- including the `im`
+        # rescue terminal.
         #
-        # Single entry, deliberately -- a public fallback would make CoreDNS
-        # pick between upstreams at random (its forward plugin's default policy)
-        # and internal names would resolve on roughly half of all queries.
+        # Single entry, deliberately. A public fallback was considered and
+        # rejected by ferry133 the same day: `all(is_private)` below would then
+        # derive `public` and switch check 18 back off, and CoreDNS's forward
+        # plugin selects among multiple upstreams at random by default
+        # (coredns.io/plugins/forward: "The default is `random`."), so internal
+        # names would resolve on roughly half of all queries with the failures
+        # cached. Intermittent is worse than absent. The cost of one entry is
+        # stated plainly: if the router's resolver dies the nodes lose name
+        # resolution -- but so does every other client on that LAN, and the
+        # cluster's upstream is gone with it.
         #
-        # Mirrors ferry133/jg-cluster-template#29. Applied here as a one-line
-        # change rather than by syncing this copy: templates/ in this repo has
-        # drifted ~890 lines from upstream, and pulling all of it in would be a
-        # template upgrade wearing a DNS fix's clothes. The drift is real and
-        # tracked separately; it is not this change's to resolve.
+        # The address must do BOTH jobs, ordinary recursion and forwarding the
+        # cluster domain -- which is why it is the router and not the shared LAN
+        # address (`docs/operations/router-dns.md` in fleet-ops). Pointing this
+        # at k8s-gateway makes node name resolution depend on the cluster it is
+        # meant to bring up.
         data.setdefault('node_dns_servers', [data['node_default_gateway']])
+        # Whether the nodes resolve names the way a LAN client does — read
+        # AFTER the default above, because the default is what the nodes get.
+        #
+        # daily-check probes `internal.<domain>` through the node's ordinary
+        # resolution path. That probe is only meaningful where that path is the
+        # LAN's: nameservers pinned to a public resolver cannot see what a LAN
+        # client sees, and Cloudflare will not serve the RFC1918 answer at all
+        # (deployment-profiles D29), so the probe would fail every morning on a
+        # cluster whose LAN is perfectly healthy. That is the same defect the
+        # probe exists to replace, one layer down.
+        #
+        # Derived, never declared. Asking the operator "how did you wire the
+        # router" would store a second copy of a fact that lives in the router,
+        # and when the two disagree the check does not go quiet — it makes a
+        # confident wrong claim and withholds the dead-man ping.
+        #
+        # This used to read `node_dns_servers` BEFORE the default and call unset
+        # "LAN", on the reasoning that unset means the nodes take DNS from DHCP
+        # like every other client on that LAN. That reasoning skipped the very
+        # next line: the default is applied unconditionally and
+        # talos/patches/global/machine-network.yaml.j2 writes it into every
+        # machine config. Measured 2026-08-23 in four rendered repos --
+        # jg-jiahd, jcom, jg-janncotcc, jgt-talos-accept -- all four pin
+        # `nameservers: [1.1.1.1, 1.0.0.1]`, and not one cluster.yaml in the
+        # fleet sets node_dns_servers. So the branch that said "LAN" described
+        # no cluster that exists, and the sibling test case immediately below it
+        # asserted the opposite answer for the identical machine config.
+        #
+        # Reading the effective value is also the only spelling that cannot go
+        # stale: whatever the default becomes, this says what the nodes got.
+        #
+        # Consequence, restated 2026-08-27 when the default above changed.
+        # It used to read: with the shipping default every cluster derives
+        # `public`, so check 18 reports "not measured" rather than probing.
+        # That was true and it was the honest answer, but it made "nothing
+        # watches the router" the fleet-wide default.
+        #
+        # With the default now the LAN router, a cluster that declares nothing
+        # derives `lan` and check 18 probes. Two things follow, and neither is
+        # automatic:
+        #
+        #   - Re-rendering is what moves a cluster, not this commit. A cluster
+        #     that has not run `task configure` since keeps whatever its
+        #     `cluster-secrets` already holds.
+        #   - On the Omni path no Talos patch is applied, so the nodes take DHCP
+        #     DNS regardless of what this file says. There the change corrects
+        #     the *declaration* to match what the nodes were already doing; it
+        #     does not change resolution. On a patched path (talhelper) it does
+        #     change resolution, and the node must be re-applied for it to take
+        #     effect.
+        #
+        # Deriving from the effective value is still the only spelling that
+        # cannot go stale, and it is now right for both paths rather than
+        # understating one of them.
+        data['node_dns_path'] = 'lan' if all(
+            ipaddress.ip_address(s).is_private
+            for s in data['node_dns_servers']) else 'public'
+        # Where the shared base manifests come from. Defaulted HERE and not only
+        # in cluster.schema.cue: CUE's `*default` never reaches this file —
+        # plugin.py reads cluster.yaml, not CUE's unified value (the same trap
+        # the longhorn selector documents in .taskfiles/template/Taskfile.yaml).
+        # Without these three lines every existing cluster.yaml, none of which
+        # names them, renders a GitRepository with an empty url.
+        data.setdefault('base_repo_url', 'https://github.com/ferry133/jg-base')
+        data.setdefault('base_repo_ref', 'main')
+        data.setdefault('base_repo_ref_kind', 'branch')
+        # The same repo as a directory next to this one, for bootstrap's helmfile
+        # — it reads HelmRelease values off disk before the cluster can fetch
+        # anything. Derived from the URL rather than declared: two fields for one
+        # fact diverge, and this one only shows up at a re-bootstrap.
+        data.setdefault(
+            'base_repo_dir',
+            data['base_repo_url'].rstrip('/').rsplit('/', 1)[-1].removesuffix('.git'))
         data.setdefault('node_ntp_servers', ['162.159.200.1', '162.159.200.123'])
         data.setdefault('cluster_pod_cidr', '10.42.0.0/16')
         # cluster_svc_cidr is required (no default) — see cluster.schema.cue.
@@ -171,6 +302,29 @@ class Plugin(makejinja.plugin.Plugin):
             'nfs': 'sc-nas',
             'replicated': 'longhorn',
         }.get(_backend, 'local-path'))
+        # claude-code's config PVC (~/.claude plus the keyring on a subPath).
+        # Defaults to what it renders TODAY, not to db_storage_class.
+        #
+        # The block tier is the right destination — gnome-keyring's file locking
+        # and claude's small frequent writes lose the same argument against NFS
+        # that databases do — but `storageClassName` is immutable, so a default
+        # that names a different class does not move anything. It renders a PVC
+        # the cluster cannot accept, on every cluster, at whatever moment each
+        # one next runs `task configure`. Measured: that default would move
+        # jg-jiahd sc-nas→longhorn and jcom sc-nas→local-path, and jcom is
+        # single-node, which is the case that must NOT move.
+        #
+        # So the move is per cluster, deliberate, and by the copy procedure in
+        # cluster.sample.yaml. Naming the current class here is also how a
+        # cluster RECORDS that it has not moved yet — same use as
+        # db_storage_class, for the same reason.
+        data.setdefault('claudecode_config_storage_class',
+                        data['default_storage_class'])
+        # Whether the workspace PVC is rendered at all. True, and the sample
+        # says in words that false deletes data: on the NFS class the
+        # provisioner's archiveOnDelete catches it, on local-path and
+        # longhorn-static nothing does.
+        data.setdefault('claudecode_workspace', True)
         # The block tier, for anything that needs fsync durability and file
         # locking. Not derived from storage_backend: NFS is never a valid answer
         # here, whatever the cluster uses for bulk data. An existing cluster
@@ -178,24 +332,136 @@ class Plugin(makejinja.plugin.Plugin):
         # and restored — a PVC's storageClassName is immutable, so the move is
         # not something a re-render can perform.
         data.setdefault('db_storage_class', 'local-path')
+        # Whether the database extras render their NAS backup CronJob:
+        # 'nfs' or 'none'. Derived, never declared — it is a restatement of
+        # "is there a NAS", and a second copy of that fact would eventually
+        # disagree with the first.
+        #
+        # It has to be a value rather than a condition because **Flux cannot
+        # branch on "is NAS_SERVER set"**. Flux substitutes with drone/envsubst,
+        # where `${VAR:+alt}` is not implemented and behaves exactly like
+        # `${VAR:-alt}`; measured with `flux envsubst` (flux 2.7.4, the same
+        # code path). So jg-base selects a directory by this word instead:
+        # kubernetes/apps/extras/<ns>/postgres/backup/${NAS_BACKUP:=nfs}.
+        # (Checking that with a shell gives the POSIX answer, not Flux's. They
+        # are opposites. See ferry133/jg-base#17.)
+        #
+        # 'none' rather than '' or false: the value lands in a stringData field
+        # on the way through, and an empty scalar is YAML null while `false` is
+        # a YAML boolean — either one gets the whole Secret rejected, which is
+        # what ferry133/jg-base#16 cost.
+        #
+        # jg-base defaults the variable to 'nfs' where it is absent, so a
+        # cluster that has not re-rendered keeps its backup rather than losing
+        # it silently. That default is why this can ship without touching every
+        # per-user repo at once.
+        data['nas_backup'] = 'nfs' if data.get('nas_server') else 'none'
         # Which claude-code instances stay up. Empty by default: each is a root
         # shell with cluster-admin that the tunnel makes reachable. Named here
         # rather than scaled by hand, which works until the next reconcile.
         data.setdefault('claude_code_always_on', [])
+        # Auth0 OIDC in front of every claude-code instance, on by default.
+        #
+        # The alternative is ttyd basic auth, a single shared password in front
+        # of a root shell with cluster-admin that the tunnel publishes to the
+        # internet — one credential for every operator, rotated by editing
+        # twenty configs, and no record of who opened the terminal. OIDC gives
+        # per-person accounts, an email allowlist, and revocation in one place.
+        #
+        # What it costs: OIDC mode leaves ttyd on loopback with no fallback, so
+        # the instance is reachable only while oauth2-proxy can reach Auth0 and
+        # the callback URL is registered. claude-code is the rescue path for a
+        # cluster whose Omni/SideroLink is down, so that path now depends on a
+        # third party being up. A cluster that will not accept the trade turns
+        # it off with `claudecode_auth0: false` and supplies ttyd_credential.
+        data.setdefault(
+            'claudecode_auth0_enabled',
+            bool(data['claudecode_auth0']) if 'claudecode_auth0' in data
+            else True)
+        if data['claudecode_auth0_enabled']:
+            # Read auth0.json only for what cluster.yaml has not already
+            # answered. The clusters that configured Auth0 before the file
+            # existed spell all of it out inline, and requiring the file from
+            # them anyway would break their next `task configure` over a value
+            # they already have.
+            fields = ('domain', 'client_id', 'client_secret')
+            if not all(data.get(f'claudecode_auth0_{f}') for f in fields) \
+                    or not data.get('claudecode_allowed_emails'):
+                auth0 = auth0_config()
+                for field in fields:
+                    data.setdefault(f'claudecode_auth0_{field}', auth0[field])
+                # cluster.yaml wins where a cluster needs someone auth0.json
+                # does not list — the client's own address, say.
+                if auth0.get('allowed_emails'):
+                    data.setdefault('claudecode_allowed_emails',
+                                    auth0['allowed_emails'])
+            if not data.get('claudecode_oauth2_cookie_secret'):
+                data['claudecode_oauth2_cookie_secret'] = oauth2_cookie_secret(
+                    data['cluster_name'])
+            # Resolve the allowlist ONCE PER INSTANCE, here, so the template
+            # cannot silently fall back.
+            #
+            # The allowlist is the whole door: every other layer of separation
+            # between two instances on one cluster is already real (each has its
+            # own claude-config and claude-workspace PVC, so its own ~/.claude,
+            # keyring, login and history), and none of it means anything if both
+            # doors admit the same people. An address on the support instance
+            # that also opens the owner's instance drops the operator into the
+            # owner's signed-in session, on the owner's account and billing.
+            #
+            # An unknown key is a hard error, not a no-op. A misspelt instance
+            # name renders, deploys, and admits the global list — indis-
+            # tinguishable from working right up until someone tries the wrong
+            # door, and by then the wrong person is already inside. Raised from
+            # data(), which runs before any file is written, so a bad override
+            # costs a message rather than a half-written kubernetes/ tree.
+            instances = data.get('claude_instances') or ['im']
+            by_instance = data.get('claudecode_allowed_emails_by_instance') or {}
+            unknown = [k for k in by_instance if k not in instances]
+            if unknown:
+                raise KeyError(
+                    "claudecode_allowed_emails_by_instance names "
+                    f"{', '.join(sorted(unknown))}, which is not in "
+                    f"claude_instances ({', '.join(instances)}). An override "
+                    "for an instance that does not exist would leave that "
+                    "instance on the global allowlist and say nothing.")
+            data['claudecode_allowed_emails_by_instance'] = {
+                name: by_instance.get(name, data.get('claudecode_allowed_emails', ''))
+                for name in instances
+            }
         # Backups are encrypted to the cluster's own age public key, taken from
         # .sops.yaml rather than added as another field to fill in. The key is
         # already there, it is already the thing that travels with the cluster
         # at handover, and a public key is not a secret. The consequence worth
         # stating: whoever holds age.key can read the backups, and nobody else
         # can — including the operator holding the R2 credentials.
+        #
+        # Read from age.key first, .sops.yaml only as a fallback. `.sops.yaml`
+        # is ITSELF a makejinja output (templates/config/.sops.yaml.j2), so on
+        # the first `task configure` of a fresh repo it does not exist yet when
+        # data() runs, and this derived ''. Every later run found the file and
+        # derived correctly — so the only run that got it wrong was the one
+        # whose output the cluster gets bootstrapped from, and `task configure`
+        # still exited 0. The backup CronJob then refuses to upload every night
+        # for the life of the appliance (jg-base backup/app/configmap.yaml:49).
+        #
+        # Reproduced on jg-janncotcc 2026-08-22: remove .sops.yaml, run
+        # makejinja, and BACKUP_AGE_RECIPIENT renders as "".
+        #
+        # age.key is an input, never an output, and `age-keygen` writes the
+        # public half into it as a comment — so it is readable at the moment
+        # data() runs, on the first render as on the hundredth.
         if 'backup_age_recipient' not in data:
-            sops_config = Path('.sops.yaml')
             recipient = ''
-            if sops_config.is_file():
-                match = re.search(r'age:\s*["\']?(age1[a-z0-9]+)',
-                                  sops_config.read_text())
+            for source, pattern in (
+                    (Path('age.key'), r'#\s*public key:\s*(age1[a-z0-9]+)'),
+                    (Path('.sops.yaml'), r'age:\s*["\']?(age1[a-z0-9]+)')):
+                if not source.is_file():
+                    continue
+                match = re.search(pattern, source.read_text())
                 if match:
                     recipient = match.group(1)
+                    break
             data['backup_age_recipient'] = recipient
         # The three LAN-facing services listen on non-overlapping ports
         # (80/443, 53, 1883), so one address serves all of them. Collapsing them
@@ -210,10 +476,14 @@ class Plugin(makejinja.plugin.Plugin):
         # deliberately by setting lan_shared_addr.
         shared = data.get('lan_shared_addr')
         if shared:
+            # Unconditional, not "only if already set". An appliance declares
+            # none of these — validation forbids them — so a conditional
+            # overwrite would leave them empty and the Gateway annotations null,
+            # which is the one shape the Gateway CRD rejects. This field is
+            # documented as superseding them, so it supersedes an absent one too.
             for field in ('cluster_gateway_addr', 'cluster_dns_gateway_addr',
                           'mqtt_lb_ip'):
-                if data.get(field):
-                    data[field] = shared
+                data[field] = shared
         # Empty is not a sharing key that everything shares — Cilium treats it
         # as no key at all, verified on jgt-omni. So the annotations can sit in
         # jg-base unconditionally and stay inert on clusters that do not share.
@@ -229,21 +499,29 @@ class Plugin(makejinja.plugin.Plugin):
         data.setdefault(
             'deploy_k8s_gateway',
             bool(data['k8s_gateway']) if 'k8s_gateway' in data else True)
-        # Nothing on the LAN connects to the external gateway — cloudflared
-        # reaches it by in-cluster DNS name — so on an appliance it takes no LAN
-        # address at all. Elsewhere it stays a LoadBalancer, because operators do
-        # reach it directly today and changing that is not this change's business.
-        data.setdefault(
-            'envoy_external_service_type',
-            'ClusterIP' if data.get('deployment_profile') == 'appliance'
-            else 'LoadBalancer')
-        data.setdefault('lan_sharing_key', 'lan' if shared else '')
+        # A LoadBalancer on every profile, appliance included. The appliance used
+        # to make it a ClusterIP on the reasoning that nothing on the LAN
+        # connects to it — cloudflared reaches it by in-cluster DNS. That
+        # reasoning missed k8s-gateway, which answers a hostname from whatever
+        # address its parent Gateway holds: on jgt-appliance every externally
+        # routed name resolved to a ClusterIP no LAN client could reach. The
+        # probe now finds a second address for it instead.
+        data.setdefault('envoy_external_service_type', 'LoadBalancer')
+        # An appliance shares whether or not the address is declared yet. It
+        # discovers exactly one address, so on the first boot — before anything
+        # is pinned — every LAN service has to share that one or all but the
+        # first sit <pending> forever. Keying off `shared` alone left them with
+        # jg-base's per-service defaults, which differ by service and therefore
+        # share nothing: measured on jgt-appliance, k8s-gateway took 10.9.1.254
+        # under key "k8s-gateway" and envoy-internal waited under "envoy-internal".
+        share_lan = bool(shared) or data.get('deployment_profile') == 'appliance'
+        data.setdefault('lan_sharing_key', 'lan' if share_lan else '')
         # An explicit namespace list, never "*": kustomize strips the quotes
         # around a substituted scalar, and a bare `*` is a YAML alias, so the
         # whole manifest fails to parse after substitution. Naming the two
         # namespaces is also the smaller permission.
         data.setdefault('lan_sharing_cross_namespace',
-                        'network,mqtt' if shared else '')
+                        'network,mqtt' if share_lan else '')
         # Every address this cluster actually hands to a LoadBalancer, so the
         # pool can stop covering the customer's entire LAN. `cluster_api_addr`
         # is deliberately absent: it is a Talos VIP, not a Service.
@@ -264,18 +542,37 @@ class Plugin(makejinja.plugin.Plugin):
                 lb_addrs.append(str(data[field]))
         seen: set[str] = set()
         addrs = [a for a in lb_addrs if not (a in seen or seen.add(a))]
-        # There is exactly one pool. A second, narrower pool alongside the wide
-        # one cannot work — being a subset it overlaps, and Cilium rejects any
-        # overlap with PoolConflict=cidr_overlap whether or not the wide one is
-        # disabled. So a cluster with nothing to enumerate writes out the whole
-        # node CIDR here, which is what it was getting implicitly anyway.
-        if addrs:
-            blocks = [{'start': a, 'stop': a} for a in addrs]
-        elif data.get('deployment_profile') == 'appliance':
-            # An appliance declares no addresses; lan-address-probe discovers one
-            # and publishes it as a second pool. This one stays empty so the two
-            # cannot overlap — Cilium rejects overlapping pools outright.
+        # There is exactly one pool per cluster. A second, narrower pool alongside
+        # a wide one cannot work — being a subset it overlaps, and Cilium rejects
+        # any overlap with PoolConflict whether or not the wide one is disabled.
+        # So a cluster with nothing to enumerate writes out the whole node CIDR
+        # here, which is what it was getting implicitly anyway.
+        #
+        # The appliance test comes FIRST, and the order is the whole fix for
+        # ferry133/jg-cluster-template#10.
+        #
+        # It used to sit after `if addrs:` and was therefore unreachable exactly
+        # when it mattered. `lan_shared_addr` back-fills cluster_gateway_addr and
+        # cluster_dns_gateway_addr about eighty lines above, and those are two of
+        # the three fields `addrs` is built from — so declaring the shared address
+        # (which fleet-ops docs/operations/router-dns.md tells every appliance operator to
+        # do before touching the router) silently populated `addrs` and took the
+        # first branch. The result on jgt-appliance: a static `pool` holding
+        # 10.9.1.254 overlapping lan-address-probe's `pool-discovered`
+        # [10.9.1.254, 10.9.1.253], Cilium disabling the whole discovered pool
+        # with PoolConflict=True, and .253 — the only address envoy-external can
+        # use — ceasing to exist. Every LAN name in the cluster's domain went
+        # NXDOMAIN while the same names answered fine over the public tunnel,
+        # because cloudflared's origin is a ClusterIP and never needed the LB.
+        #
+        # An appliance discovers its addresses at runtime and lan-address-probe
+        # owns allocating them, so the static pool must be empty on an appliance
+        # unconditionally — whether or not the operator has since declared the
+        # address he was told to declare.
+        if data.get('deployment_profile') == 'appliance':
             blocks = []
+        elif addrs:
+            blocks = [{'start': a, 'stop': a} for a in addrs]
         else:
             blocks = [{'cidr': str(data.get('node_cidr'))}]
         data.setdefault('lb_pool_blocks',
@@ -287,6 +584,20 @@ class Plugin(makejinja.plugin.Plugin):
             'local_path_is_default',
             'true' if data.get('storage_backend') != 'nfs' else 'false',
         )
+        # Whether Longhorn is installed. `storage_backend: "replicated"` implies
+        # it, but a NAS-backed cluster can ask for it too — the NAS is right for
+        # bulk and wrong for a database, and Longhorn is the one block class that
+        # does not pin the pod to a node. Those clusters cannot say so through
+        # storage_backend, which also decides whether nfs-subdir runs.
+        #
+        # This is not db_storage_class: installing the tier and moving a database
+        # onto it are separate, because storageClassName is immutable and moving
+        # means dump and restore. Keeping them separate is what lets the install
+        # be verified before anything depends on it.
+        data.setdefault(
+            'deploy_longhorn',
+            bool(data['replicated_storage']) if 'replicated_storage' in data
+            else data.get('storage_backend') == 'replicated')
         # Single-node clusters must not run components that require peers. The
         # node list is only authoritative on the manual path — the Omni path
         # always renders `nodes: []` — so an Omni cluster that is not an

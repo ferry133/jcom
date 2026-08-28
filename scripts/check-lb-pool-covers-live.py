@@ -5,7 +5,7 @@ Run this BEFORE pushing a narrowed pool. "Did anything break after narrowing?"
 is the wrong question: Cilium does not revoke an address when the pool that
 supplied it goes away, so a missing address looks fine until the Service is next
 recreated — a Helm upgrade or a node event, days later, with nothing connecting
-cause to effect. See openspec/changes/deployment-profiles/design.md D26.
+cause to effect. See fleet-ops openspec/changes/deployment-profiles/design.md D26.
 
 Usage:  KUBECONFIG=… SOPS_AGE_KEY_FILE=… ./scripts/check-lb-pool-covers-live.py [repo]
 Exit 0 if every assigned address is covered, 1 otherwise.

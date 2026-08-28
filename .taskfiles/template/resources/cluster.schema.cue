@@ -20,7 +20,7 @@ import (
 	//   nfs          NAS-backed
 	//   replicated   Longhorn. Requires Talos system extensions on every node,
 	//                which no manifest can install — see
-	//                docs/operations/replicated-storage.md
+	//                fleet-ops docs/operations/replicated-storage.md
 	storage_backend: "local-path" | "nfs" | "replicated"
 
 	// An appliance has no NAS to configure and nobody to configure it. It is
@@ -32,6 +32,69 @@ import (
 	// cost of Longhorn with none of the protection.
 	if single_node == true {
 		storage_backend: "local-path" | "nfs"
+	}
+
+	// Whether Longhorn is installed, independent of which tier bulk data uses.
+	// `storage_backend: "replicated"` means "Longhorn, and it is also the bulk
+	// tier"; this means "Longhorn is available" and leaves bulk where it is.
+	//
+	// A NAS-backed cluster with several nodes needs exactly that combination: the
+	// NAS is right for bulk and wrong for a database, and the only class that is
+	// block-backed without pinning the pod to one node is Longhorn. Expressing it
+	// through storage_backend alone is not possible — that field also decides
+	// whether nfs-subdir runs, so asking for Longhorn there takes the NAS away
+	// from everything already on it.
+	//
+	// Installing it does not move any database onto it; that is db_storage_class
+	// below, and it is a separate step because storageClassName is immutable and
+	// moving means dump and restore.
+	//
+	// Defaults to whether storage_backend is "replicated" — declared here without
+	// a value so the derivation lives in exactly one place (see plugin.py).
+	replicated_storage?: bool
+
+	// Same reasoning as storage_backend above: two replicas on one machine are
+	// two copies of one disk.
+	if single_node == true {
+		replicated_storage?: false
+	}
+
+	// Where Longhorn writes its backups. Optional, and absent means no Longhorn
+	// backups at all — which is what every cluster did before this existed.
+	//
+	// Longhorn's replica count survives a node dying. It does not survive
+	// `kubectl delete pvc` or a corrupt table: both are replicated faithfully to
+	// every replica. This is the only thing in the stack that does.
+	//
+	// A URL, not a bool, because the destination is per-cluster and unguessable
+	// — it is a LAN NAS export that most clusters cannot reach, which is exactly
+	// why it cannot be hardcoded in jg-base. Longhorn accepts nfs://, cifs://,
+	// s3://, azblob:// and gcs://; only NFS is exercised here.
+	//
+	// jg-base derives the on/off selector from whether this is set, so there is
+	// no second field to keep in agreement with it (see plugin.py).
+	// Defaulted rather than optional, so the guard below can actually read it.
+	// `longhorn_backup_target?: string` with `if longhorn_backup_target != _|_`
+	// looks like the same thing and is not: that comparison never fires, and a
+	// guard that never fires reads exactly like one that passes. Caught by
+	// running the negative control instead of only the positive one.
+	longhorn_backup_target: *"" | string
+
+	// Backing up a Longhorn volume requires Longhorn.
+	//
+	// ⚠️ This catches HALF the problem and it is worth knowing which half.
+	// It fires on the outright contradiction — a target together with an
+	// explicit `replicated_storage: false` — measured: "conflicting values
+	// true and false". It does NOT fire when `replicated_storage` is simply
+	// absent, because defining an optional field is not a conflict, and
+	// plugin.py derives `deploy_longhorn` from cluster.yaml rather than from
+	// CUE's unified value, so this line changes nothing about the render.
+	//
+	// The absent case is the one that happens, and it is covered by
+	// scripts/check-longhorn-backup.py against the rendered artifacts. Do not
+	// read this block as the guard; it is the cheap half of one.
+	if longhorn_backup_target != "" {
+		replicated_storage: true
 	}
 
 	// Whether this cluster has exactly one node. Derived where it can be —
@@ -82,6 +145,21 @@ import (
 	// node-local class, so the pinning acknowledgement below fires and asks
 	// about exactly the thing that was forgotten.
 	db_storage_class: *"local-path" | string & !=""
+	// claude-code's config PVC — ~/.claude and the keyring it holds, one volume
+	// because a token and the keyring holding it have no reason to be apart.
+	//
+	// Defaults to default_storage_class (today's value), NOT to db_storage_class.
+	// `storageClassName` is immutable, so pointing a default somewhere else does
+	// not migrate a cluster, it renders a PVC the cluster cannot accept. Naming
+	// a class here is how a cluster records where it is — including recording
+	// that it has not moved yet.
+	claudecode_config_storage_class?: string & !=""
+	// Whether the workspace PVC is rendered at all. Default true.
+	//
+	// ⚠️ false REMOVES the PVC from the release. On the NFS class the
+	// provisioner archives rather than deletes; on local-path and
+	// longhorn-static the reclaim policy is Delete and nothing catches it.
+	claudecode_workspace?: bool
 
 	// Whether anything in this cluster lands on a node-local class. This, and
 	// not `storage_backend`, is what the acknowledgement below has to be keyed
@@ -176,6 +254,20 @@ import (
 	repository_name: string & !="" & !="ferry133/xxxxxx" & !="ferry133/jg-base"
 	repository_branch?: string & !=""
 	repository_visibility?: *"public" | "private"
+	// Where this cluster's shared base manifests come from. Defaulted, not
+	// optional: every cluster has an answer, and the default is the fleet's.
+	//
+	// A cluster whose owner takes over maintenance points these at their own
+	// fork; a cluster that wants to stop tracking `main` pins a tag or a commit.
+	// Nothing else about the rendered Flux tree may change with them — see
+	// ks.yaml.j2 for why renaming the GitRepository tears the cluster down.
+	base_repo_url: *"https://github.com/ferry133/jg-base" | string & !=""
+	base_repo_ref: *"main" | string & !=""
+	// Which Flux ref field `base_repo_ref` lands in. Declared rather than
+	// inferred: a tag and a branch are both just strings, and guessing wrong
+	// produces a GitRepository that reconciles something other than what the
+	// operator named — which reads exactly like it worked.
+	base_repo_ref_kind: *"branch" | "tag" | "semver" | "commit"
 	cloudflare_domain: net.FQDN
 	cloudflare_token: string
 	github_webhook_token?: string & !=""
@@ -193,15 +285,15 @@ import (
 	// stops needing more than 1370 bytes.
 	cilium_native_routing?: bool
 
-	cilium_bgp_router_addr?: net.IPv4 & !=""
-	cilium_bgp_router_asn?: string & !=""
-	cilium_bgp_node_asn?: string & !=""
-	cilium_loadbalancer_mode?: *"dsr" | "snat"
 	// NAS — only meaningful when bulk storage is NFS-backed. nas_coding_path
 	// stays optional even then: without it the claude-code workspace falls back
 	// to the profile's default storage class.
 	nas_server?: net.IPv4 & !=""
 	nas_path?: string & !=""
+	// ⚠️ UNCONSUMED since the claude-code `coding` mount was removed. Kept
+	// because three cluster.yaml files declare it and deleting the field would
+	// fail their next `cue vet` over a value that harms nothing. NAS_CODING_PATH
+	// is still rendered into cluster-secrets and still read by nobody.
 	nas_coding_path?: string & !=""
 
 	if storage_backend == "nfs" {
@@ -252,8 +344,7 @@ import (
 	claudecode_postgres_password?: string & !=""
 	claude_code_database_url?: string
 	// claudecode/claude-code (base app on every cluster). claude_instances
-	// defaults to ["im"] at render time; ttyd_credential is only unused when
-	// claudecode_auth0_* switches the instances to OIDC login.
+	// defaults to ["im"] at render time.
 	claude_instances?: [...string]
 	// Which claude-code instances stay running. Empty by default — each is a
 	// root shell with cluster-admin RBAC that the tunnel exposes — so a cluster
@@ -263,19 +354,80 @@ import (
 	// A list rather than a flag because clusters do mix: jcom keeps `im` up for
 	// support and leaves `cc` at zero until it is needed.
 	claude_code_always_on?: [...string]
-	// Strength is checked by scripts/check-ttyd-credential.py, not here: a CUE
-	// constraint prints the offending value in its error, and a check that leaks
-	// the credential into a terminal and CI log to complain about it is worse
-	// than no check.
+	// Auth0 OIDC login in front of every claude-code instance. Defaults to true
+	// at render time; the four claudecode_auth0_* / allowed_emails values come
+	// from the gitignored auth0.json unless set here.
+	//
+	// Setting it false falls back to ttyd basic auth, which then needs
+	// ttyd_credential — checked by scripts/check-claudecode-auth.py.
+	claudecode_auth0?: bool
+	// Only used when claudecode_auth0 is false. Strength is checked by
+	// scripts/check-claudecode-auth.py, not here: a CUE constraint prints the
+	// offending value in its error, and a check that leaks the credential into
+	// a terminal and CI log to complain about it is worse than no check.
 	ttyd_credential?: string & !=""
+	// Each overrides the matching field in auth0.json. Rarely needed — every
+	// cluster fronts claude-code with the same Auth0 application.
 	claudecode_auth0_domain?: string & !=""
 	claudecode_auth0_client_id?: string & !=""
 	claudecode_auth0_client_secret?: string & !=""
+	// Derived from age.key + cluster_name at render time when absent, so it is
+	// stable across renders and distinct per cluster. Leaving it unset is the
+	// good case — the derivation has always emitted the shape oauth2-proxy
+	// wants, and every value it has ever refused was one a human wrote.
+	//
+	// The format rule is in scripts/check-claudecode-auth.py, not here, for the
+	// same reason as ttyd_credential above: `cue vet` prints the offending
+	// value in its error (measured — a mismatching secret came back verbatim in
+	// the message), so a CUE constraint would put this secret in a terminal and
+	// a CI log in order to complain about it.
 	claudecode_oauth2_cookie_secret?: string & !=""
 	claudecode_allowed_emails?: string & !=""
+	// Per-instance override of the line above, keyed by instance name. Absent
+	// keys inherit the global list, so a cluster that sets only the global
+	// field renders exactly what it rendered before.
+	//
+	// Exists because the allowlist is the one layer of separation between two
+	// instances on a cluster that was NOT per-instance: each already has its
+	// own config and workspace PVC, hence its own ~/.claude, keyring, login and
+	// history. One shared door undoes all of that.
+	//
+	// A key that is not in claude_instances fails the render — see plugin.py.
+	// CUE cannot express that cross-check against a field it may only see
+	// defaulted, and an override that silently does nothing is exactly the
+	// failure this field exists to prevent.
+	claudecode_allowed_emails_by_instance?: [string]: string & !=""
 	talos_mcp_config?: string & !=""
 	talos_mcp_sa_key?: string & !=""
 	talos_mcp_omni_endpoint?: string & !=""
+	// factory provisioning credentials (extras/factory/factory in jg-base).
+	// Only the cluster that hosts factory sets these -- jcom today. Every one is
+	// optional and renders empty elsewhere, which is what the consuming Secret
+	// expects: empty means "not issued yet", and each consumer fails loudly on
+	// it (omnictl refuses to authenticate, gh reports no token, a zero-byte
+	// deploy key fails at key load).
+	//
+	// Declared here 2026-08-27. Before that the consuming half existed in
+	// jg-base while nothing could declare the values, so factory's pod ran
+	// 2/2 Ready holding three empty credentials -- measured on jcom that day:
+	// OMNI_SERVICE_ACCOUNT_KEY, GITHUB_TOKEN and CLOUDFLARE_API_TOKEN were all
+	// len=0 while the pod, the Secret and the env names all read as present.
+	//
+	// Four, not five. `factory_cloudflare_token` was declared here on
+	// 2026-08-27 and removed on 2026-08-29: ferry133/jg-base#44 established
+	// that its premise was gone. That row assumed "the operator's Cloudflare
+	// account holds every customer zone", and D11 (2026-08-25) puts each
+	// customer's Cloudflare account under the customer's own identity —
+	// measured, janncot.cc and jiahd.cc answer from different NS pairs, which
+	// Cloudflare assigns per account. jg-base removed the consuming key in
+	// #46, so a value set here would render into a Secret key that no longer
+	// exists. Do not re-add it without reading that README section: the
+	// deciding argument is that the credential cannot be singular while this
+	// field is a scalar.
+	factory_omni_sa_key?:            string & !=""
+	factory_omni_endpoint?:          string & !=""
+	factory_github_token?:           string & !=""
+	factory_fleet_ops_deploy_key?:   string & !=""
 	postgres_password?: string & !=""
 	trello_api_key?: string
 	trello_api_token?: string
@@ -283,7 +435,32 @@ import (
 	line_channel_access_token?: string
 	line_channel_secret?: string
 	line_notify_group_id?: string
+	// Optional in general, REQUIRED when an extra that reads it is selected.
+	// Conditional and not unconditional: a cluster that runs neither must not be
+	// made to supply a key it does not use.
+	//
+	// Without this, selecting either extra rendered cleanly with an empty key
+	// and the failure arrived later, from the workload, as an auth error a long
+	// way from the field that caused it.
+	//
+	// ⚠️ What this does NOT check is provenance. Presence is all a schema can
+	// see; whether the key belongs to the cluster's owner rather than to the
+	// operator is a delivery-time question with a recorded answer, and a set,
+	// valid, working key that bills the wrong party passes every check here.
+	// Same shape as a notification address that delivers mail to the wrong
+	// people.
+	//
+	// Also worth knowing: the two extras share this ONE variable rather than
+	// holding a key each. Fine while one party owns both; a cluster that ever
+	// runs them for different parties would be using one credential for both.
 	anthropic_api_key?: string
+	#AnthropicExtras: [
+		"default/linebot",
+		"default/synophoto",
+	]
+	if len([for e in extras if list.Contains(#AnthropicExtras, e) {e}]) > 0 {
+		anthropic_api_key: string & !=""
+	}
 	database_url?: string
 	synophoto_auth0_domain?: string
 	synophoto_auth0_client_id?: string

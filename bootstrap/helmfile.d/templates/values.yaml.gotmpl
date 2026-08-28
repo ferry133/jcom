@@ -1,3 +1,9 @@
+{{/* The base repo as a SIBLING DIRECTORY on the operator's machine, not as a
+     URL: bootstrap reads HelmRelease values off disk before the cluster can
+     fetch anything. Derived from base_repo_url so a fork is cloned under its
+     own name and this still finds it -- one fact, one place. A cluster that
+     switched base_repo_url and left this pointing at `jg-base` would only
+     find out at the next bootstrap, which is the worst moment to find out. */}}
 {{- $base := printf "../../../../jg-base/kubernetes/apps/base/%s/%s/app/helmrelease.yaml" .Release.Namespace .Release.Name -}}
 {{- $extras := printf "../../../../jg-base/kubernetes/apps/extras/%s/%s/app/helmrelease.yaml" .Release.Namespace .Release.Name -}}
 {{- $check := exec "sh" (list "-c" (printf "test -f '%s' && echo yes || echo no" $base)) | trim -}}

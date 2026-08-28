@@ -68,15 +68,18 @@ spec:
               # this pod is hostNetwork.
               TALOS_MCP_URL: http://127.0.0.1:8765/sse
 #% endif %#
-#% if claudecode_auth0_domain is defined %#
-              # OIDC mode: the oauth2-proxy sidecar is the only way in --
-              # ttyd binds loopback and requires the email header the proxy
-              # injects (value surfaces as TTYD_USER -> CLAUDE_USER_ID).
+#% if claudecode_auth0_enabled %#
+              # OIDC mode (the default): the oauth2-proxy sidecar is the only
+              # way in -- ttyd binds loopback and requires the email header the
+              # proxy injects (value surfaces as TTYD_USER -> CLAUDE_USER_ID).
               # Explicit IP, not "lo": ttyd resolves an interface name to its
               # first non-127 address (Talos puts 169.254.x.x on lo).
               TTYD_INTERFACE: 127.0.0.1
               TTYD_AUTH_HEADER: X-Forwarded-Email
 #% else %#
+              # Only reached via `claudecode_auth0: false`. One shared password
+              # in front of a cluster-admin root shell -- see the note on
+              # claudecode_auth0_enabled in plugin.py for what that gives up.
               TTYD_CREDENTIAL:
                 valueFrom:
                   secretKeyRef:
@@ -84,7 +87,7 @@ spec:
                     key: TTYD_CREDENTIAL
 #% endif %#
             probes:
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
               # ttyd binds loopback, unreachable from kubelet's tcpSocket
               # probe (hostNetwork pod IP) -- check from inside the pod.
               liveness:
@@ -198,7 +201,7 @@ spec:
               limits:
                 memory: 128Mi
 #% endif %#
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
           oauth2-proxy:
             image:
               repository: quay.io/oauth2-proxy/oauth2-proxy
@@ -212,7 +215,51 @@ spec:
               - --redirect-url=https://#{instance}#.${SECRET_DOMAIN}/oauth2/callback
               - --authenticated-emails-file=/etc/oauth2-proxy/allowed-emails
               - --skip-provider-button=true
-              - --reverse-proxy=true
+              # Off, deliberately, and not just left at the default -- someone
+              # will want to add it back. See #9.
+              #
+              # What --reverse-proxy=true does in v7.15.3, read from the source
+              # rather than from the flag's name:
+              #
+              #   - X-Forwarded-Proto/-Host/-Uri become trusted input. With no
+              #     --trusted-proxy-ip they are trusted from 0.0.0.0/0 + ::/0
+              #     (oauthproxy.go:404 logs a WARNING saying exactly that).
+              #   - the `client` field in every request log stops being the
+              #     connected peer and becomes whatever --real-client-ip-header
+              #     names -- X-Real-IP by default -- read straight off the
+              #     request with no trust check anywhere
+              #     (validation/options.go:83 installs the parser, ip/
+              #     realclientip.go:67 uses it). --trusted-proxy-ip does NOT
+              #     gate this; upstream's own warning at validation/
+              #     allowlist.go:22 says the same thing about X-Real-IP.
+              #
+              # This pod is hostNetwork, so :4180 listens on the node's LAN
+              # address. "Any source" is therefore every device on the
+              # customer's network, reaching oauth2-proxy without passing
+              # through envoy at all -- which is also why no trusted-proxy list
+              # could have fixed the log field.
+              #
+              # What is given up: the end-user's IP never appears in these logs
+              # again. It never reliably did (envoy sends X-Forwarded-For, not
+              # X-Real-IP), and the parties that actually see the client already
+              # record it -- Cloudflare for the tunnel, Auth0 for the login.
+              # What is gained: `client` means the peer that connected, always,
+              # and no header can move it.
+              #
+              # Nothing here depended on the trusted headers: --redirect-url is
+              # absolute, so getOAuthRedirectURI returns it before reading any
+              # header (oauthproxy.go:1115), and there are no --skip-auth-route
+              # patterns whose matching could be steered by X-Forwarded-Uri.
+              # X-Forwarded-Email still reaches ttyd -- that header comes from
+              # --pass-basic-auth / --pass-user-headers (both default true,
+              # options/legacy_options.go:215) and has never been tied to this
+              # flag.
+              #
+              # Re-enabling it means supplying --trusted-proxy-ip with this
+              # cluster's pod CIDR in the same edit, and accepting that the
+              # `client` field goes back to being forgeable regardless.
+              # scripts/check-forwarded-header-trust.py enforces the first half.
+              - --reverse-proxy=false
               - --cookie-secure=true
               - --cookie-expire=168h
             env:
@@ -259,22 +306,43 @@ spec:
               limits:
                 memory: 128Mi
 #% endif %#
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
     configMaps:
       oauth2-emails:
         data:
-          # One email per line, rendered from claudecode_allowed_emails at
-          # template time -- deliberately NOT a Flux var: postBuild
-          # substitution collapses newlines in multi-line values.
+          # One email per line, rendered at template time -- deliberately NOT
+          # a Flux var: postBuild substitution collapses newlines in multi-line
+          # values.
+          #
+          # Indexed by instance, not the global field: this ConfigMap is inside
+          # the per-instance loop, and reading one global value here gave two
+          # instances byte-identical allowlists. plugin.py resolves the map for
+          # every instance (falling back to claudecode_allowed_emails) and fails
+          # the render on a name that is not an instance, so this subscript is
+          # total and a KeyError here would be a bug there.
           allowed-emails: |
-#% for email in claudecode_allowed_emails.split(',') %#
+#% for email in claudecode_allowed_emails_by_instance[instance].split(',') %#
             #{ email | trim }#
 #% endfor %#
 #% endif %#
     persistence:
+#| One PVC, two mounts, and they stay together: an OAuth token and the keyring
+   holding it have no reason to live on different volumes. Moving this PVC moves
+   both, which is why claudecode_config_storage_class is one knob and not two.
+
+   Its default is `default_storage_class` -- TODAY'S value, so merging this
+   moves nobody. That is deliberate and it is not what a "block tier by default"
+   reading would give: `storageClassName` is immutable, so a changed default
+   does not migrate anything, it renders a PVC the cluster cannot accept, on
+   every cluster at once, at whatever moment each next runs `task configure`.
+
+   The block tier IS the right destination -- gnome-keyring's file locking and
+   claude's small frequent writes lose the same argument against NFS that
+   databases do. But a cluster gets there by the copy procedure in
+   cluster.sample.yaml, one at a time, with the archive taken first. #|
       claude-config:
         type: persistentVolumeClaim
-        storageClass: #{ default_storage_class }#
+        storageClass: #{ claudecode_config_storage_class }#
         accessMode: ReadWriteOnce
         size: 5Gi
         globalMounts:
@@ -283,6 +351,13 @@ spec:
           # secret-service; without this mount they die with the pod.
           - path: /home/claude/.local/share/keyrings
             subPath: keyrings
+#| claudecode_workspace: false removes the PVC from the release. On the NFS
+   class the provisioner's archiveOnDelete renames the directory rather than
+   deleting it; on local-path and longhorn-static the reclaim policy is Delete
+   and nothing catches it. Hence the default is true and the sample says so in
+   words -- a cluster.yaml copied from another one should not be able to destroy
+   a workspace on the next `task configure` without having said so. #|
+#% if claudecode_workspace %#
       claude-workspace:
         type: persistentVolumeClaim
         storageClass: #{ default_storage_class }#
@@ -290,10 +365,19 @@ spec:
         size: 20Gi
         globalMounts:
           - path: /home/claude/workspace
-#| The shared coding directory is an NFS export or it is nothing: with no NAS
-   there is nothing to share, and rendering the mount anyway produced empty
-   server/path values that the chart's schema rejects outright — the whole
-   release fails to install, not just this volume. #|
+#% endif %#
+#| ⚠️ 宣告的本地例外（jcom，2026-08-29）。上游已於 `c8f9357`（jgct#31）移除這個掛載。
+   這裡保留，因為它**不是空的**：實測 `10.9.1.12:/volume2/jia.homedesign` 掛在
+   `/home/claude/coding`，20 個項目，內容是營運中的案場檔案。上游那次移除有寫後果，
+   而它落在這座叢集上的後果是「終端看不到正在使用的業務資料」——**那是 ferry133 的
+   決定，不該由一次模板同步夾帶。**
+
+   移除的條件：確認那些檔案不再需要從終端存取，或已搬到 workspace PVC。
+   在那之前，每次同步這個檔都要重新移植這一段；它與上游其餘部分無關，可整段搬。
+
+   上游原本的理由（保留）：The shared coding directory is an NFS export or it is
+   nothing — with no NAS there is nothing to share, and rendering the mount anyway
+   produced empty server/path values that the chart's schema rejects outright. #|
 #% if nas_coding_path is defined and nas_coding_path %#
       coding:
         type: nfs
@@ -302,7 +386,7 @@ spec:
         globalMounts:
           - path: /home/claude/coding
 #% endif %#
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
       oauth2-emails:
         type: configMap
         identifier: oauth2-emails
@@ -351,7 +435,7 @@ spec:
       app:
         ports:
           http:
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
             port: 4180
 #% else %#
             port: 7681
@@ -366,7 +450,7 @@ spec:
         rules:
           - backendRefs:
               - identifier: app
-#% if claudecode_auth0_domain is defined %#
+#% if claudecode_auth0_enabled %#
                 port: 4180
 #% else %#
                 port: 7681

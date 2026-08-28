@@ -67,10 +67,16 @@ tasks:
     prompt: Any conflicting files in the kubernetes directory will be overwritten... continue?
     cmds:
       - task: check-integrity
-      - task: check-ttyd-credential
+      - task: check-claudecode-auth
+      - task: check-lb-pool-render
+      - task: check-forwarded-header-trust
+      - task: check-node-dns-path
+      - task: check-nas-backup
       - task: generate-node-config
       - task: validate-schemas
       - task: render-configs
+      - task: check-backup-recipient
+      - task: check-longhorn-backup
       - task: validate-manifests
       - task: encrypt-secrets
     preconditions:
@@ -80,7 +86,7 @@ tasks:
         sh: test -f {{.TEMPLATE_CONFIG_FILE}}
       # Without this, rendering dies partway through cluster-secrets with a
       # Python traceback and leaves a half-written kubernetes/ directory.
-      - msg: File cloudflare-tunnel.json not found — create it with `cloudflared tunnel create --credentials-file cloudflare-tunnel.json kubernetes` (see docs/deploy/manual.md, Stage 4)
+      - msg: File cloudflare-tunnel.json not found — create it with `cloudflared tunnel create --credentials-file cloudflare-tunnel.json kubernetes` (see fleet-ops docs/deploy/manual.md, Stage 4)
         sh: test -f {{.ROOT_DIR}}/cloudflare-tunnel.json
 
   check:
@@ -95,14 +101,97 @@ tasks:
     preconditions:
       - test -f {{.SCRIPTS_DIR}}/check-template-integrity.py
 
-  # Before rendering, not after: the credential guards a shell the tunnel makes
-  # publicly reachable, so a weak one should stop the render rather than be
-  # discovered once it is already deployed.
-  check-ttyd-credential:
+  # Before rendering, not after: this gate stands in front of a shell the
+  # tunnel makes publicly reachable, so a missing Auth0 application or a weak
+  # ttyd credential should stop the render rather than be discovered once it is
+  # already deployed. Missing auth0.json in particular would otherwise surface
+  # as a traceback partway through cluster-secrets, leaving a half-written
+  # kubernetes/ directory behind.
+  check-claudecode-auth:
     internal: true
-    cmd: python3 {{.SCRIPTS_DIR}}/check-ttyd-credential.py {{.TEMPLATE_CONFIG_FILE}}
+    cmd: python3 {{.SCRIPTS_DIR}}/check-claudecode-auth.py {{.TEMPLATE_CONFIG_FILE}}
     preconditions:
-      - test -f {{.SCRIPTS_DIR}}/check-ttyd-credential.py
+      - test -f {{.SCRIPTS_DIR}}/check-claudecode-auth.py
+
+  # An appliance emitting a non-empty static pool is #10 returning: it overlaps
+  # lan-address-probe's discovered pool, Cilium disables the whole discovered
+  # pool, and every LAN name goes NXDOMAIN while the public tunnel keeps
+  # answering. The original defect was an unreachable branch, which review does
+  # not catch and no rendered artifact shows.
+  check-lb-pool-render:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-lb-pool-render.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-lb-pool-render.py
+
+  # Before rendering, for the same reason as check-claudecode-auth above: this
+  # stands in front of the same publicly-reachable root shell. #9 was closed by
+  # a single word -- `--reverse-proxy=false` -- and every way of undoing it
+  # renders a manifest that looks entirely plausible, including the `--trusted-ip`
+  # typo, which skips authentication rather than naming a proxy.
+  check-forwarded-header-trust:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-forwarded-header-trust.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-forwarded-header-trust.py
+
+  # daily-check's internal-name probe raises a LAN-wide alarm, and this flag is
+  # the only thing deciding whether it runs on a given cluster. Both ways of
+  # getting it wrong are silent: stuck `lan` alarms every morning on a healthy
+  # LAN whose nodes point at a public resolver, stuck `public` means nothing
+  # here watches the router at all. It also asserts the derived value is one a
+  # YAML parser still reads as a string — a boolean there takes daily-check's
+  # whole Secret down (ferry133/jg-base#16).
+  check-node-dns-path:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-node-dns-path.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-node-dns-path.py
+
+  # Off-site backups are encrypted to the cluster's own age public key, and
+  # that value is derived rather than declared — so nobody types it, and nobody
+  # notices when it comes out wrong. Two silent failures live here: an empty
+  # recipient (the CronJob refuses to upload, every night, for the life of the
+  # appliance) and a recipient that is not this cluster's key (uploads succeed
+  # and no archive can be read at restore time).
+  #
+  # Runs between render-configs and encrypt-secrets: the plaintext render is
+  # the only moment the value that actually ships can be read.
+  check-backup-recipient:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-backup-recipient.py {{.ROOT_DIR}}
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-backup-recipient.py
+
+  # Whether the Longhorn backup selector agrees with whether this cluster
+  # installs Longhorn (ferry133/jg-base#7). `cue vet` cannot close this one: it
+  # catches `longhorn_backup_target` together with an explicit
+  # `replicated_storage: false`, but not `replicated_storage` simply absent —
+  # an optional field CUE may define as true is not a conflict, and plugin.py
+  # reads cluster.yaml rather than CUE's unified value. Measured: that
+  # combination renders deploy_longhorn=False with longhorn_backup=nfs and
+  # vets clean, which applies a RecurringJob against a CRD nothing installs.
+  #
+  # After render-configs, like check-backup-recipient: the input someone meant
+  # to write and the artifact that ships are different things.
+  check-longhorn-backup:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-longhorn-backup.py {{.ROOT_DIR}}
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-longhorn-backup.py
+
+  # Whether the database extras render their NAS backup CronJob at all. Both
+  # ways of being wrong are quiet: stuck `nfs` renders a PersistentVolume with
+  # an empty nfs.server on an appliance and turns that Kustomization red
+  # (ferry133/jg-base#17); stuck `none` stops every NAS cluster's database dumps
+  # with nothing going red at all. It also asserts the derived word is one YAML
+  # still reads as a string — see the daily-check note above for what a boolean
+  # there costs.
+  check-nas-backup:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-nas-backup.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-nas-backup.py
 
   validate-schemas:
     internal: true
@@ -113,10 +202,16 @@ tasks:
       - |
         yq eval-all '. as $item ireduce ({}; . * $item)' \
           {{.TEMPLATE_CONFIG_FILE}} {{.TEMPLATE_NODE_CONFIG_FILE}} > {{.MERGED_CONFIG_FILE}}
+        rc=0
         cue vet {{.MERGED_CONFIG_FILE}} \
           {{.TEMPLATE_RESOURCES_DIR}}/cluster.schema.cue \
-          {{.TEMPLATE_RESOURCES_DIR}}/nodes.schema.cue
+          {{.TEMPLATE_RESOURCES_DIR}}/nodes.schema.cue || rc=$?
+        # Delete on the failure path too. The merged file is cluster.yaml's
+        # plaintext credentials; aborting here used to leave it in the repo
+        # root until the next successful run — i.e. for exactly as long as the
+        # operator is editing and retrying.
         rm -f {{.MERGED_CONFIG_FILE}}
+        exit $rc
     preconditions:
       - test -f {{.TEMPLATE_RESOURCES_DIR}}/cluster.schema.cue
       - test -f {{.TEMPLATE_RESOURCES_DIR}}/nodes.schema.cue
