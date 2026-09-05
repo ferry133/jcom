@@ -61,6 +61,21 @@ spec:
               # but set here as well so it holds on any tag predating that and
               # regardless of what the image ships.
               LANG: C.UTF-8
+              # Registers the MCP memory server (explicit memory): k8scc's
+              # claude-session runs `claude mcp add memory` only when this is
+              # non-empty. Unconditional on purpose — the Secret key always
+              # exists (jg-base secret.yaml defaults it to ""), an empty value
+              # is exactly the no-database behavior, and a template conditional
+              # here would add one more place where "forgot to set" and "chose
+              # not to set" render identically (ferry133/jg-cluster-template#77:
+              # this env was simply missing, and explicit memory was
+              # zero-functional fleet-wide while the database it writes to was
+              # deployed, backed up, and empty).
+              DATABASE_URL:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: DATABASE_URL
               # OIDC mode (the default): the oauth2-proxy sidecar is the only
               # way in -- ttyd binds loopback and requires the email header the
               # proxy injects (value surfaces as TTYD_USER -> CLAUDE_USER_ID).
@@ -347,6 +362,21 @@ spec:
               # but set here as well so it holds on any tag predating that and
               # regardless of what the image ships.
               LANG: C.UTF-8
+              # Registers the MCP memory server (explicit memory): k8scc's
+              # claude-session runs `claude mcp add memory` only when this is
+              # non-empty. Unconditional on purpose — the Secret key always
+              # exists (jg-base secret.yaml defaults it to ""), an empty value
+              # is exactly the no-database behavior, and a template conditional
+              # here would add one more place where "forgot to set" and "chose
+              # not to set" render identically (ferry133/jg-cluster-template#77:
+              # this env was simply missing, and explicit memory was
+              # zero-functional fleet-wide while the database it writes to was
+              # deployed, backed up, and empty).
+              DATABASE_URL:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: DATABASE_URL
               # OIDC mode (the default): the oauth2-proxy sidecar is the only
               # way in -- ttyd binds loopback and requires the email header the
               # proxy injects (value surfaces as TTYD_USER -> CLAUDE_USER_ID).

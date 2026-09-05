@@ -31,11 +31,16 @@ Usage
   delivery-check.py dns          --domain DOMAIN [--token-env VAR]
   delivery-check.py flux         --kubeconfig PATH --expect-sha SHA
   delivery-check.py lan          --domain DOMAIN --expect-addr ADDR
+  delivery-check.py gateway      --node ADDR [--talosconfig PATH] [--routes-json PATH]
+  delivery-check.py deploy-key   --repo OWNER/NAME [--pubkey PATH]
+  delivery-check.py tunnel-cert  --domain DOMAIN [--cert PATH] [--token-env VAR]
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import importlib.util
 import json
 import os
 import pathlib
@@ -511,6 +516,365 @@ def check_lan(args) -> int:
     return PASS
 
 
+# --------------------------------------------------- default gateway (5)
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _merged_config(root: pathlib.Path):
+    """cluster.yaml unified with nodes.yaml, the way `task configure` does it."""
+    if not shutil.which("yq"):
+        return None, "yq is not on PATH — run this under `mise exec`"
+    files = [root / "cluster.yaml"]
+    if (root / "nodes.yaml").is_file():
+        files.append(root / "nodes.yaml")
+    if not files[0].is_file():
+        return None, f"{files[0]} not here — run this inside a cluster repo"
+    r = run(["yq", "eval-all", "-o=json", ". as $i ireduce ({}; . * $i)",
+             *[str(f) for f in files]])
+    if r.returncode != 0:
+        return None, f"yq could not read the config: {r.stderr.strip()[:140]}"
+    try:
+        return json.loads(r.stdout), None
+    except json.JSONDecodeError as e:
+        return None, f"the merged config did not decode as JSON: {e}"
+
+
+def _shipped_gateway(root: pathlib.Path):
+    """(address, provenance, error). provenance is "declared" or "assumed".
+
+    The address comes from the real `Plugin.data()`, never from a second copy
+    of the `.1` rule. `#32` cost the whole fleet its ability to render because
+    this file's neighbour held a copy of one value plugin.py owns, and the copy
+    stayed behind when the original changed.
+    """
+    raw, err = _merged_config(root)
+    if err:
+        return None, None, err
+    provenance = "declared" if "node_default_gateway" in raw else "assumed"
+    loader = root / "scripts" / "check-node-dns-path.py"
+    if not loader.is_file():
+        return None, None, f"{loader} not here — it owns the makejinja stub"
+    try:
+        spec = importlib.util.spec_from_file_location("_cndp", loader)
+        cndp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cndp)
+        data = cndp.load_plugin().Plugin(dict(raw)).data()
+    except Exception as e:  # a real repo has auth0.json; a bare one does not
+        return None, provenance, f"could not render the config: {type(e).__name__}: {str(e)[:140]}"
+    return data.get("node_default_gateway"), provenance, None
+
+
+def _route_docs(args):
+    """Whatever talosctl says, as a list of decoded JSON documents."""
+    if args.routes_json:
+        f = pathlib.Path(args.routes_json)
+        if not f.is_file():
+            return None, f"{f} not here"
+        text = f.read_text()
+    else:
+        if not shutil.which("talosctl"):
+            return None, "talosctl is not on PATH"
+        cmd = ["talosctl"]
+        if args.talosconfig:
+            cmd += ["--talosconfig", args.talosconfig]
+        cmd += ["-n", args.node, "get", "routes", "-o", "json"]
+        r = run(cmd, timeout=args.timeout)
+        if r.returncode != 0:
+            return None, f"talosctl failed: {(r.stderr or r.stdout).strip()[:200]}"
+        text = r.stdout
+    docs, dec, i = [], json.JSONDecoder(), 0
+    while i < len(text):
+        if text[i].isspace():
+            i += 1
+            continue
+        try:
+            doc, end = dec.raw_decode(text, i)
+        except json.JSONDecodeError as e:
+            return None, f"talosctl output did not decode as JSON at offset {i}: {e}"
+        docs.append(doc)
+        i = end
+    return docs, None
+
+
+def check_gateway(args) -> int:
+    """The nodes' real default route, against the one this repo ships.
+
+    `#49`: `node_default_gateway` defaults to `.1` of `node_cidr`, which is an
+    assumption about someone else's LAN. It is invisible when wrong — configure
+    succeeds, `cue vet` passes, the cluster boots, and nothing leaves the LAN —
+    and it is invisible when right for the wrong reason, because the operator's
+    own LANs are all `.1`, so the assumed string and the measured one match on
+    every cluster this lab can test.
+
+    Positive control, per this file's rule: a node always has routes. Zero
+    routes back is what asking the wrong question looks like, not a node
+    without a gateway, so it reports UNKNOWN rather than a missing default.
+
+    Two default routes are not resolved by picking one — same rule as multiple
+    candidate subnets for `node_cidr`.
+    """
+    shipped, provenance, err = _shipped_gateway(REPO_ROOT)
+    if err:
+        huh(f"cannot tell what this repo ships: {err}")
+        return UNKNOWN
+
+    docs, err = _route_docs(args)
+    if err:
+        huh(f"cannot measure the node's routes: {err}")
+        print(f"      This repo would ship {shipped} ({provenance}). Unverified.")
+        return UNKNOWN
+
+    if not docs:
+        huh("talosctl returned no routes at all")
+        print("      Every node has routes, so this is the wrong question being")
+        print("      asked — wrong node, wrong resource name, or no permission —")
+        print("      not a node without a default gateway.")
+        return UNKNOWN
+
+    specs = [d.get("spec", d) for d in docs]
+    if not any("gateway" in sp for sp in specs):
+        keys = sorted({k for sp in specs if isinstance(sp, dict) for k in sp})
+        huh(f"no route carries a `gateway` key across {len(docs)} routes")
+        print(f"      Keys seen: {', '.join(keys) or 'none'}")
+        print("      The selector below expects `gateway` and `dst`. If talosctl")
+        print("      names them differently, fix the two names here — do not")
+        print("      loosen this into picking whatever is first.")
+        return UNKNOWN
+
+    defaults = [
+        sp for sp in specs
+        if isinstance(sp, dict) and sp.get("gateway") and not sp.get("dst")
+    ]
+    # node_default_gateway is `net.IPv4` in cluster.schema.cue, so an IPv6
+    # default route is not a second candidate for it — it is a different
+    # question. Measured 2026-08-30 on a real 145-route capture from a jg-jiahd
+    # node: 110 of them inet6, one of those with an empty dst (no gateway, so
+    # it never reached this line). A node that does have an IPv6 default
+    # gateway would have made the count two and this check would have refused
+    # to choose — a false alarm on a healthy dual-stack node, which is the
+    # failure mode that gets guards switched off.
+    #
+    # `family` absent is kept rather than dropped: an unknown shape should
+    # widen the answer into "cannot tell", never narrow it into a confident one.
+    other = sorted({sp["gateway"] for sp in defaults
+                    if sp.get("family") not in (None, "", "inet4")})
+    found = sorted({sp["gateway"] for sp in defaults
+                    if sp.get("family") in (None, "", "inet4")})
+    if other:
+        print(f"      ({len(other)} non-IPv4 default route(s) not compared: "
+              f"{', '.join(other)} — node_default_gateway is IPv4)")
+
+    if not found:
+        huh(f"{len(docs)} routes, none of them a default route")
+        print("      A default route is one with a gateway and no destination.")
+        return UNKNOWN
+    if len(found) > 1:
+        huh(f"{len(found)} default routes: {', '.join(found)}")
+        print("      Refusing to pick. Which one the node uses depends on metric")
+        print("      and interface, and guessing here would ship a number that")
+        print("      looks measured. Decide on the node, then declare it.")
+        return UNKNOWN
+
+    measured = found[0]
+    if measured != shipped:
+        bad(f"this repo ships {shipped} ({provenance}); the node routes via {measured}")
+        print("      Set node_default_gateway in cluster.yaml to the measured")
+        print("      value and re-run `task configure`. Left alone, the cluster")
+        print("      comes up and nothing reaches the internet.")
+        return FAIL
+
+    if provenance == "assumed":
+        ok(f"default route {measured} — matches, but cluster.yaml does not say so")
+        print("      Declare it anyway: it is right by coincidence today, and")
+        print("      the next node_cidr change silently moves it.")
+        return PASS
+    ok(f"default route {measured} — declared in cluster.yaml and measured on the node")
+    return PASS
+
+
+# ------------------------------------------------- deploy key (6)
+
+def check_deploy_key(args) -> int:
+    """The deploy key exists locally AND GitHub has it.
+
+    `#56`: `task init` runs `ssh-keygen` and the template renders the private
+    half into a Secret, so every artefact a person would look at is present —
+    and `gh api repos/<repo>/keys` was empty on jg-janncotcc. Nothing in either
+    repo registers the public half, and on a PUBLIC repo nothing ever notices,
+    because Flux clones anonymously. It surfaces only when the repo goes
+    private, as `GitRepository READY=False` during a provisioning run.
+
+    Registering is a runbook step (fleet-ops), not something this repo should
+    do behind an operator's back — a write to someone's GitHub account is not a
+    side effect of a check. Detecting it is this repo's half.
+
+    Positive control: the local public key is compared to what GitHub returns,
+    so a repo carrying somebody else's key is a finding rather than a pass.
+    "The list is not empty" would accept exactly that.
+    """
+    pub = pathlib.Path(args.pubkey)
+    if not pub.is_file():
+        huh(f"{pub} is not here — run `task init` in the cluster repo first")
+        return UNKNOWN
+    if not shutil.which("gh"):
+        huh("gh is not on PATH")
+        return UNKNOWN
+
+    # ssh-keygen writes "<type> <base64> <comment>"; GitHub returns and compares
+    # the first two fields only, so the comment must not take part.
+    local = " ".join(pub.read_text().split()[:2])
+
+    r = run(["gh", "api", f"repos/{args.repo}/keys", "--jq", ".[].key"])
+    if r.returncode != 0:
+        huh(f"could not list deploy keys: {r.stderr.strip()[:160]}")
+        print("      Not reporting a missing key: no answer and an empty answer")
+        print("      are different, and only one of them is a finding.")
+        return UNKNOWN
+
+    remote = [" ".join(k.split()[:2]) for k in r.stdout.splitlines() if k.strip()]
+    if local in remote:
+        ok(f"{args.repo} carries this repo's deploy key ({len(remote)} key(s) registered)")
+        return PASS
+
+    if not remote:
+        bad(f"{args.repo} has no deploy keys at all")
+    else:
+        bad(f"{args.repo} has {len(remote)} deploy key(s), none of them this one")
+    print("      Register it:")
+    print(f"        gh api -X POST repos/{args.repo}/keys \\")
+    print(f"          -f title='flux' -f key=\"$(cat {pub})\" -F read_only=true")
+    print("      Until then a private repo cannot be synced: Flux authenticates")
+    print("      with the matching private half and GitHub will refuse it.")
+    return FAIL
+
+
+# ------------------------------------------------ tunnel cert (7)
+
+CERT_BLOCK = re.compile(
+    r"-----BEGIN ARGO TUNNEL TOKEN-----(.*?)-----END ARGO TUNNEL TOKEN-----", re.S
+)
+
+
+def _cert_binding(cert: pathlib.Path) -> tuple[dict, str | None]:
+    """The accountID/zoneID a cloudflared cert is bound to.
+
+    The file is a base64 JSON blob with exactly three keys: `accountID`,
+    `zoneID` and `apiToken`. **The third is a credential.** Only the first two
+    are ever returned, and nothing here formats the parsed object as a whole —
+    a check that leaks the secret it is validating is a worse trade than the
+    check is worth.
+    """
+    try:
+        text = cert.read_text()
+    except OSError as e:
+        return {}, f"could not read it: {e}"
+    m = CERT_BLOCK.search(text)
+    if not m:
+        return {}, "no ARGO TUNNEL TOKEN block in it — is this a cloudflared cert?"
+    try:
+        payload = json.loads(base64.b64decode("".join(m.group(1).split())))
+    except Exception as e:  # noqa: BLE001 — malformed is "cannot tell", not a finding
+        return {}, f"the token block did not decode: {type(e).__name__}"
+    if not isinstance(payload, dict):
+        return {}, "the token block is not an object"
+    return (
+        {k: payload.get(k) for k in ("accountID", "zoneID") if payload.get(k)},
+        None,
+    )
+
+
+def check_tunnel_cert(args) -> int:
+    """Which Cloudflare account `cloudflared tunnel login` actually bound to.
+
+    Nothing checks this today, and every downstream step passes when it is
+    wrong: `cloudflared tunnel create` succeeds, `cloudflare-tunnel.json` is
+    written, `task configure` renders. The cluster comes up and the tunnel
+    answers **1033**.
+
+    Measured 2026-09-02 (`#63`): re-running the runbook's Step 2 opened a
+    browser already signed in as the operator, while the account being
+    authorised had to be the customer's. The authorisation page even lists a
+    `Moved` remnant of the old account with the right name and an `Active`
+    plan. What stopped it was a person reading the screen.
+
+    So this is the after-the-fact half. It cannot prevent clicking Authorize in
+    the wrong window — nothing measured that day could — it catches it before
+    the cert is used for anything.
+
+    The filename is never evidence. `fleet-ops docs/deploy/manual.md` Stage 4
+    says so, and the fixture that proves it is called `cert.pem.for.janncot`
+    while being bound to the operator's own account.
+    """
+    cert = pathlib.Path(args.cert).expanduser()
+    if not cert.is_file():
+        huh(f"{cert} is not here")
+        print("      That is also the state right before `cloudflared tunnel")
+        print("      login` — absent and wrong are different answers, so this")
+        print("      reports neither pass nor fail.")
+        return UNKNOWN
+
+    binding, err = _cert_binding(cert)
+    if err:
+        huh(f"{cert}: {err}")
+        return UNKNOWN
+    if "accountID" not in binding or "zoneID" not in binding:
+        huh(f"{cert} carries {sorted(binding) or 'nothing'} — expected accountID and zoneID")
+        return UNKNOWN
+
+    token = os.environ.get(args.token_env or "CLOUDFLARE_TOKEN", "")
+    if not token:
+        huh(f"${args.token_env or 'CLOUDFLARE_TOKEN'} not set — cannot ask "
+            "Cloudflare which account owns this domain")
+        print(f"      The cert is bound to account {binding['accountID']},")
+        print(f"      zone {binding['zoneID']}. Compare by hand, or set the token.")
+        return UNKNOWN
+
+    req = urllib.request.Request(
+        f"https://api.cloudflare.com/client/v4/zones?name={args.domain}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = json.load(r)
+    except Exception as e:  # noqa: BLE001
+        huh(f"could not query Cloudflare: {e}")
+        return UNKNOWN
+
+    zones = body.get("result") or []
+    if len(zones) != 1:
+        huh(f"Cloudflare returned {len(zones)} zones named {args.domain}")
+        print("      Zero means this token cannot see the zone — which is itself")
+        print("      a finding, but not the one this check makes. More than one")
+        print("      is ambiguous and picking would invent an answer.")
+        return UNKNOWN
+
+    want_zone = zones[0].get("id")
+    want_account = (zones[0].get("account") or {}).get("id")
+    got_zone, got_account = binding["zoneID"], binding["accountID"]
+
+    wrong = []
+    if got_account != want_account:
+        wrong.append(("account", got_account, want_account))
+    if got_zone != want_zone:
+        wrong.append(("zone", got_zone, want_zone))
+
+    if not wrong:
+        ok(f"{cert.name} is bound to the account and zone that own {args.domain}")
+        print(f"      account {got_account}  zone {got_zone}")
+        return PASS
+
+    bad(f"{cert.name} is bound to the wrong Cloudflare account for {args.domain}")
+    for what, got, want in wrong:
+        print(f"      {what}: cert says {got}")
+        print(f"      {' ' * len(what)}  {args.domain} belongs to {want}")
+    print("      Re-run `cloudflared tunnel login` in a browser signed in as the")
+    print("      account that owns this domain, and check the window before")
+    print("      authorising. A tunnel built on this cert answers 1033 and")
+    print("      nothing before that point complains.")
+    return FAIL
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -542,7 +906,28 @@ def main() -> None:
     l.add_argument("--expect-addr", required=True)
     l.set_defaults(func=check_lan)
 
+    g = sub.add_parser("gateway")
+    g.add_argument("--node", help="node address talosctl should ask")
+    g.add_argument("--talosconfig")
+    g.add_argument("--routes-json",
+                   help="a captured `talosctl get routes -o json`, instead of asking a node")
+    g.add_argument("--timeout", type=int, default=30)
+    g.set_defaults(func=check_gateway)
+
+    k = sub.add_parser("deploy-key")
+    k.add_argument("--repo", required=True, help="OWNER/NAME on GitHub")
+    k.add_argument("--pubkey", default="github-deploy.key.pub")
+    k.set_defaults(func=check_deploy_key)
+
+    t = sub.add_parser("tunnel-cert")
+    t.add_argument("--domain", required=True)
+    t.add_argument("--cert", default="~/.cloudflared/cert.pem")
+    t.add_argument("--token-env", default="CLOUDFLARE_TOKEN")
+    t.set_defaults(func=check_tunnel_cert)
+
     args = p.parse_args()
+    if args.cmd == "gateway" and not args.node and not args.routes_json:
+        p.error("gateway needs --node, or --routes-json to read a capture")
     sys.exit(args.func(args))
 
 

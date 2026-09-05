@@ -10,11 +10,21 @@ that scales it up removes it.
 
 Two modes, so two checks:
 
-  Auth0 (the default)   auth0.json must supply the shared application's domain,
-                        client_id and client_secret. Absent, the render dies
-                        partway through with a traceback; empty, it deploys an
-                        oauth2-proxy that cannot start — and OIDC mode gives
-                        ttyd no fallback, so that is a terminal nobody reaches.
+  Auth0 (the default)   cluster.yaml must carry THIS cluster's own tenant —
+                        domain, client_id, client_secret and allowed_emails.
+                        Absent, the render dies partway through with a
+                        traceback; empty, it deploys an oauth2-proxy that
+                        cannot start — and OIDC mode gives ttyd no fallback, so
+                        that is a terminal nobody reaches.
+
+                        Until `#64` this said "the shared application's", and
+                        told operators to copy auth0.json from another cluster.
+                        The 2026-08-25 ruling gives every cluster its own
+                        tenant; a cluster that deliberately shares one says so
+                        with `claudecode_auth0_shared: true`. This check runs
+                        SECOND in `:configure:` and the render is tenth, so
+                        whatever this file says is what an operator acts on —
+                        the message in plugin.py is never reached.
 
                         An operator-declared cookie secret is checked here too.
                         It is optional and derived correctly when absent, so the
@@ -86,10 +96,22 @@ def auth0_enabled(path: Path) -> bool:
 
 
 def check_auth0(config: Path) -> list[str]:
-    """Whatever cluster.yaml does not override has to come from auth0.json.
+    """cluster.yaml must carry this cluster's own tenant; auth0.json is opt-in.
 
-    allowed_emails counts among those: OIDC mode renders the allowlist into a
-    ConfigMap, and an absent one fails the render rather than defaulting open.
+    allowed_emails counts among the required values: OIDC mode renders the
+    allowlist into a ConfigMap, and an absent one fails the render rather than
+    defaulting open.
+
+    This docstring said the opposite until 2026-09-03 — "whatever cluster.yaml
+    does not override has to come from auth0.json" — sitting directly above the
+    function that now implements the reverse. It survived the `#64` sweep
+    because that sweep grepped for the words the other copies used (`shared`,
+    `same application`, `copy … another cluster`) and this one uses none of
+    them. **"I grepped" and "I grepped for the right words" read identically.**
+    Found by the acceptance reviewer; two more (cluster.sample.yaml's
+    "Overrides, rarely needed" and "Defaults to the operators listed in
+    auth0.json") were then found by listing every mention of the filename and
+    reading them, instead of searching for remembered phrasing.
     """
     from_config = {
         field: yq(f'.claudecode_auth0_{field} // ""', config)
@@ -99,13 +121,34 @@ def check_auth0(config: Path) -> list[str]:
     if all(from_config.values()) and emails:
         return []
 
+    # Reading auth0.json is opt-in since `#64`. Without the flag, a missing
+    # field is an error rather than something inherited from whichever cluster
+    # directory the file was copied out of — "forgot to set it" and
+    # "deliberately shares a tenant" used to produce identical output, and the
+    # identical output was the shared one.
+    shared = yq('.claudecode_auth0_shared // ""', config) in ("true", "True")
+    if not shared:
+        absent = [f for f in AUTH0_FIELDS if not from_config[f]]
+        if not emails:
+            absent.append("allowed_emails")
+        return [
+            "cluster.yaml is missing this cluster's own Auth0 values: "
+            + ", ".join(absent),
+            "since 2026-08-25 every cluster gets its OWN Auth0 tenant — do NOT "
+            "copy auth0.json out of another cluster directory, which is what "
+            "this message used to tell you to do",
+            "read them from this cluster's tenant into cluster.yaml, or set "
+            "`claudecode_auth0_shared: true` if it deliberately shares another "
+            "cluster's application",
+            "or set `claudecode_auth0: false` in cluster.yaml for ttyd basic auth",
+        ]
+
     auth0 = config.parent / "auth0.json"
     if not auth0.is_file():
         return [
-            "auth0.json not found — claude-code defaults to Auth0 login",
-            "copy it from another cluster directory (it is the same shared "
-            "Auth0 application everywhere, and gitignored in all of them)",
-            "or set `claudecode_auth0: false` in cluster.yaml for ttyd basic auth",
+            "claudecode_auth0_shared is set but auth0.json is not in this "
+            "directory — that flag is what makes reading it legitimate, and "
+            "there is nothing to read",
         ]
     try:
         data = json.loads(auth0.read_text())

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Report how a per-user cluster repo's templates differ from this one.
 
-Every cluster repo carries its own copy of `templates/` and `.taskfiles/`.
+Every cluster repo carries its own copy of `templates/`, `.taskfiles/`
+and `scripts/` — all three, see TRACKED. The docstring said two of them
+until 2026-08-30, and the missing one is where every guard lives, so a
+reader checking whether guards are covered here read "no".
 Copies drift: someone edits a shared file to solve a local problem, and from
 then on that repo silently stops receiving improvements to it. Worse, the edit
 outlives its reason — jg-jiahd carried a cloudflare-tunnel patch for three weeks
@@ -9,7 +12,10 @@ after jg-base adopted exactly those values as the default, and nothing said so.
 
 So this reports three things, and the third is the one people forget:
 
-  DRIFTED    the file differs — an exception, or an edit nobody wrote down
+  DRIFTED    the file differs — and, since 2026-08-30 (`#54`), whether it is
+             *stale* or *edited*: the cluster's bytes are looked up in this
+             repo's history for that path, so a copy that is simply an older
+             template version says so and names the commit it came from
   BEHIND     the file is missing locally — this repo will not get the feature
   EXTRA      the file exists only locally — a whole addition to account for
   MODE       same bytes, different permission bit
@@ -69,6 +75,70 @@ def diff_size(a: Path, b: Path) -> int:
         for line in result.stdout.splitlines()
         if line[:1] in "+-" and not line.startswith(("+++", "---"))
     )
+
+
+def git(template: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git", "-C", str(template), *args], capture_output=True, text=True
+    )
+
+
+def stale_or_edited(template: Path, rel: Path, cluster_file: Path) -> str:
+    """Is the cluster's copy an older version of this file, or an edited one?
+
+    `#54`: this report used to say only that the bytes differ, and left the
+    reader to decide between "a declared per-cluster exception" and "nobody
+    synced it". Measured 2026-08-30 across the fleet — four different versions
+    of `check-template-integrity.py` in circulation and two repos without the
+    file at all — that distinction is the whole question, and nothing was
+    answering it.
+
+    It is answerable without asking anyone: git already stores every version
+    this repo has ever had. If the cluster's bytes hash to a blob this path
+    held at some commit, the copy is that version — stale, not edited. If they
+    hash to nothing in that path's history, somebody changed it locally.
+
+    Returns a phrase to append to the DRIFTED row. Never guesses: when the
+    template is not a git repo, or git fails, it says so rather than implying
+    the file was edited — "could not look" and "edited" are different answers
+    and only one of them is a finding.
+    """
+    blob = git(template, "hash-object", str(cluster_file))
+    if blob.returncode != 0:
+        return "could not hash it — is the template a git repo?"
+    want = blob.stdout.strip()
+
+    log = git(template, "log", "--format=%H %ad", "--date=short", "--", str(rel))
+    if log.returncode != 0:
+        return "could not read this path's history"
+    # How far back it is comes from the position in this list, not from
+    # `rev-list --count <sha>..HEAD`. That count was tried first and printed
+    # `0 change(s) behind` for a file whose bytes differ — because history
+    # simplification drops merge commits from a path's log, so the count can be
+    # zero while the content is not. A number that reads "up to date" next to a
+    # row that exists because the file is not is worse than no number.
+    #
+    # The index needs no ancestry arithmetic: this log is already newest-first,
+    # so the number of entries passed before the match IS the number of
+    # recorded versions newer than the cluster's.
+    for newer, line in enumerate(log.stdout.splitlines()):
+        sha, _, date = line.partition(" ")
+        got = git(template, "rev-parse", f"{sha}:{rel}")
+        if got.returncode != 0 or got.stdout.strip() != want:
+            continue
+        if newer == 0:
+            # It matched the newest commit touching this path, yet the bytes
+            # differ from what is on disk here. The difference is the
+            # template's own working tree, not the cluster.
+            return (
+                f"matches template {sha[:7]} ({date}), the newest commit for this"
+                " path — the difference is uncommitted work in the TEMPLATE"
+            )
+        return (
+            f"stale: this is template {sha[:7]} ({date}), "
+            f"{newer} newer version(s) of this file since"
+        )
+    return "edited locally: these bytes are no version this path ever had"
 
 
 def main() -> int:
@@ -153,7 +223,14 @@ def main() -> int:
     print(f"compared: {len(theirs & ours)} shared files\n")
 
     for label, rows in (
-        ("DRIFTED", [(p, f"{n} changed lines") for p, n in drifted]),
+        (
+            "DRIFTED",
+            [
+                (p, f"{n} changed lines; "
+                    + stale_or_edited(template, p, cluster / p))
+                for p, n in drifted
+            ],
+        ),
         ("BEHIND ", [(p, "missing locally") for p in behind]),
         ("EXTRA  ", [(p, "not in template") for p in extra]),
         (
@@ -189,9 +266,13 @@ def main() -> int:
         return 0
 
     print(f"\n{total} file(s) diverge.")
-    print("Each DRIFTED file is either a declared per-cluster exception or an")
-    print("undeclared edit. Check both directions: an exception whose reason")
-    print("upstream has since adopted is dead weight that still reads as current.")
+    print("Each DRIFTED row says which kind it is. `stale` means nobody synced")
+    print("this repo — no judgement needed, and the named commit says how far")
+    print("back it is. `edited locally` is the one that needs a reason, and an")
+    print("exception whose reason upstream has since adopted is dead weight that")
+    print("still reads as current.")
+    print("Nothing here applies anything: `stale` and a deliberate exception are")
+    print("told apart by this report, not by a copy that would overwrite both.")
     return 1
 
 

@@ -9,9 +9,32 @@
 {{- $check := exec "sh" (list "-c" (printf "test -f '%s' && echo yes || echo no" $base)) | trim -}}
 {{- $path := ternary $base $extras (eq $check "yes") -}}
 {{- $values := (fromYaml (readFile $path)).spec.values -}}
+{{/* Bootstrap writes the sync URL literally: there is no cluster-secrets to
+     substitute from yet. It must therefore make the same public/private choice
+     that cluster-secrets.sops.yaml.j2 makes for the steady state, and the two
+     have to agree -- `#56`. */}}
 {{- if and (eq .Release.Namespace "flux-system") (eq .Release.Name "flux-instance") -}}
+{{/* jgct#71: the base values carry a literal ${FLUX_SYNC_PULL_SECRET:=} that only
+     Flux postBuild can resolve, and bootstrap runs before Flux exists. Left in
+     place, the chart's `if .pullSecret` sees a non-empty string and the
+     FluxInstance points its self-sync GitRepository at a secret that never
+     exists -- Flux can then never start (measured, 2026-09-04 jg-janncotcc
+     rebuild). unset rather than mergeOverwrite with "": sprig's merge sits on
+     mergo, which treats "" as a zero value and may silently skip the override;
+     removing the key leaves nothing for the chart's `if` to see. */}}
 {{- $values = mergeOverwrite $values (dict "instance" (dict "sync" (dict "url" "https://github.com/ferry133/jcom.git"))) -}}
+{{- $_ := unset $values.instance.sync "pullSecret" -}}
 {{- end -}}
 {{- $yaml := $values | toYaml -}}
 {{- $yaml = $yaml | replace "${COREDNS_CLUSTER_IP}" "10.43.0.10" -}}
+{{/* Residue guard, jgct#71: bootstrap has no postBuild, so ANY ${VAR} reaching
+     this point ships as a literal string into a live chart -- for flux-instance
+     that shape was a silent, total deadlock. Every variable a bootstrap-consumed
+     base app carries must be resolved above (COREDNS_CLUSTER_IP, FLUX_SYNC_*).
+     Failing the render turns the silent deadlock into a loud one-line error at
+     the only moment this path is ever exercised. */}}
+{{- $residue := regexFindAll `\$\{[A-Za-z_][A-Za-z_0-9]*(:=[^}]*)?\}` $yaml -1 -}}
+{{- if $residue -}}
+{{- fail (printf "bootstrap values for %s/%s still contain unsubstituted Flux postBuild variable(s) %v: bootstrap has no postBuild -- resolve them in values.yaml.gotmpl like COREDNS_CLUSTER_IP and FLUX_SYNC_* (jgct#71)" .Release.Namespace .Release.Name $residue) -}}
+{{- end -}}
 {{ $yaml }}

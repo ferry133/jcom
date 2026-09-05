@@ -3,7 +3,7 @@
 # claude_instances in cluster.yaml -- jg-jiahd overrides it to "cc"
 # (cc.jiahd.cc). The shared manifests (namespace, SA/RBAC, OCIRepository,
 # secrets) come from jg-base kubernetes/apps/base/claudecode.
-#% for instance in claude_instances | default(['im']) %#
+#% for instance in claude_instances %#
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -62,6 +62,21 @@ spec:
               # but set here as well so it holds on any tag predating that and
               # regardless of what the image ships.
               LANG: C.UTF-8
+              # Registers the MCP memory server (explicit memory): k8scc's
+              # claude-session runs `claude mcp add memory` only when this is
+              # non-empty. Unconditional on purpose — the Secret key always
+              # exists (jg-base secret.yaml defaults it to ""), an empty value
+              # is exactly the no-database behavior, and a template conditional
+              # here would add one more place where "forgot to set" and "chose
+              # not to set" render identically (ferry133/jg-cluster-template#77:
+              # this env was simply missing, and explicit memory was
+              # zero-functional fleet-wide while the database it writes to was
+              # deployed, backed up, and empty).
+              DATABASE_URL:
+                valueFrom:
+                  secretKeyRef:
+                    name: claude-code-secret
+                    key: DATABASE_URL
 #% if talos_mcp_config is defined %#
               # Registers the talos-mcp sidecar as a remote MCP server (see
               # claude-session in k8scc) -- reachable only via loopback since

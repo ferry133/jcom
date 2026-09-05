@@ -72,6 +72,7 @@ tasks:
       - task: check-forwarded-header-trust
       - task: check-node-dns-path
       - task: check-nas-backup
+      - task: check-private-repo-chain
       - task: generate-node-config
       - task: validate-schemas
       - task: render-configs
@@ -192,6 +193,17 @@ tasks:
     cmd: python3 {{.SCRIPTS_DIR}}/check-nas-backup.py
     preconditions:
       - test -f {{.SCRIPTS_DIR}}/check-nas-backup.py
+
+  # `repository_visibility: private` needs a change in jg-base as well as here,
+  # and until both exist a private cluster bootstraps successfully and then
+  # loses its credential when Helm re-renders the FluxInstance. Refusing at
+  # render time is the cheap end of that; finding out is the expensive end
+  # (`#56` cost a provisioning run).
+  check-private-repo-chain:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-private-repo-chain.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-private-repo-chain.py
 
   validate-schemas:
     internal: true
