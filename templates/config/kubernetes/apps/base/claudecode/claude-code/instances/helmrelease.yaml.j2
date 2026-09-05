@@ -381,26 +381,6 @@ spec:
         globalMounts:
           - path: /home/claude/workspace
 #% endif %#
-#| ⚠️ 宣告的本地例外（jcom，2026-08-29）。上游已於 `c8f9357`（jgct#31）移除這個掛載。
-   這裡保留，因為它**不是空的**：實測 `10.9.1.12:/volume2/jia.homedesign` 掛在
-   `/home/claude/coding`，20 個項目，內容是營運中的案場檔案。上游那次移除有寫後果，
-   而它落在這座叢集上的後果是「終端看不到正在使用的業務資料」——**那是 ferry133 的
-   決定，不該由一次模板同步夾帶。**
-
-   移除的條件：確認那些檔案不再需要從終端存取，或已搬到 workspace PVC。
-   在那之前，每次同步這個檔都要重新移植這一段；它與上游其餘部分無關，可整段搬。
-
-   上游原本的理由（保留）：The shared coding directory is an NFS export or it is
-   nothing — with no NAS there is nothing to share, and rendering the mount anyway
-   produced empty server/path values that the chart's schema rejects outright. #|
-#% if nas_coding_path is defined and nas_coding_path %#
-      coding:
-        type: nfs
-        server: "${NAS_SERVER}"
-        path: "${NAS_CODING_PATH}"
-        globalMounts:
-          - path: /home/claude/coding
-#% endif %#
 #% if claudecode_auth0_enabled %#
       oauth2-emails:
         type: configMap
