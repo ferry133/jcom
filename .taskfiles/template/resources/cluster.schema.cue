@@ -342,6 +342,10 @@ import (
 	freepbx_mysql_root_password?: string & !=""
 	freepbx_mysql_password?: string & !=""
 	claudecode_postgres_password?: string & !=""
+	// DEPRECATED 2026-09-06 (jgct#85): the URL is DERIVED by plugin.py from
+	// claudecode_postgres_password and this field is ignored (plugin overwrites
+	// it). Kept optional so existing cluster.yaml files still setting it do not
+	// fail cue vet; drop it at next edit.
 	claude_code_database_url?: string
 	// claudecode/claude-code EXTRA instances. The default `im` is a static
 	// base app in jg-base since 2026-09-06 — it deploys on every re-rendered

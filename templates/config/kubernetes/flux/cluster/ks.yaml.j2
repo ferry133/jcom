@@ -246,6 +246,26 @@ spec:
      'the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front'
         if claudecode_auth0_enabled
         else 'claudecode_auth0 is false and the base im hardwires the Auth0 sidecar: an empty path so Flux prunes it, while the basic-auth instance renders from claude_instances')) %#
+#|   claudecode-db / -db-backup: the explicit-memory PostgreSQL from jg-base
+     (jgct#85), one per default im. Base Kustomization is named claudecode-db
+     (NOT -postgres: that collides with the extras copy and would fight it on a
+     cluster still running the extra -- jg-base PR#74). Always on -- every im
+     has memory -- so `app` is a fixed position, not a two-state switch; the
+     patch existing is what unsuspends jg-base's suspend:true default. backup IS
+     two-state: nfs when there is a NAS, else the empty `none` path (Flux prunes
+     the CronJob). Path chosen HERE, not via ${NAS_BACKUP} in the path -- a base
+     path with a ${VAR} aborts flux-local collection (jg-base#28). #|
+#% set _ = _enabled.append((
+     'claudecode-db',
+     './kubernetes/apps/base/claudecode/postgres',
+     'app',
+     'explicit-memory PostgreSQL from jg-base, one per default im, always on since 2026-09-06')) %#
+#% set _ = _enabled.append((
+     'claudecode-db-backup',
+     './kubernetes/apps/base/claudecode/postgres/backup',
+     nas_backup,
+     'pg_dump CronJob to the NAS backup1 share' if nas_backup == 'nfs'
+        else 'no NAS: empty none path so Flux prunes the CronJob rather than a suspend that would strand it')) %#
 #% for name, basepath, position, why in _enabled %#
     # #{ 'enabled' if position == 'enabled' else 'disabled (empty path, so anything previously applied is pruned)' }#: #{ why }#
     - patch: |-

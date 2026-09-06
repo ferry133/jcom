@@ -186,6 +186,34 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: claude-code-im
+    # disabled (empty path, so anything previously applied is pruned): explicit-memory PostgreSQL from jg-base, one per default im, always on since 2026-09-06
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: claudecode-db
+          namespace: flux-system
+        spec:
+          suspend: false
+          path: ./kubernetes/apps/base/claudecode/postgres/app
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: claudecode-db
+    # disabled (empty path, so anything previously applied is pruned): pg_dump CronJob to the NAS backup1 share
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: claudecode-db-backup
+          namespace: flux-system
+        spec:
+          suspend: false
+          path: ./kubernetes/apps/base/claudecode/postgres/backup/nfs
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: claudecode-db-backup
     # single node: one envoy replica per gateway, not two
     - patch: |-
         - op: add
@@ -341,30 +369,6 @@ spec:
   deletionPolicy: WaitForTermination
   interval: 1h
   path: ./kubernetes/apps/extras/default/mqtt
-  prune: true
-  sourceRef:
-    kind: GitRepository
-    name: jg-base
-    namespace: flux-system
-  postBuild:
-    substituteFrom:
-      - name: cluster-secrets
-        kind: Secret
-  dependsOn:
-    - name: cluster-apps-base
----
-# ── extras/claudecode/postgres ─────────────────────────────────────────────────────────
-apiVersion: kustomize.toolkit.fluxcd.io/v1
-kind: Kustomization
-metadata:
-  name: extras-postgres
-  namespace: flux-system
-spec:
-  decryption:
-    provider: sops
-  deletionPolicy: WaitForTermination
-  interval: 1h
-  path: ./kubernetes/apps/extras/claudecode/postgres
   prune: true
   sourceRef:
     kind: GitRepository

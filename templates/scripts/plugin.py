@@ -179,6 +179,21 @@ def oauth2_cookie_secret(cluster_name: str, file_path: str = 'age.key') -> str:
     return base64.urlsafe_b64encode(digest).decode('utf-8')
 
 
+def claudecode_postgres_password(cluster_name: str,
+                                 file_path: str = 'age.key') -> str:
+    """Derive the explicit-memory PostgreSQL password, like the oauth2 cookie
+    secret: HMAC of age.key over a labelled cluster name (jgct#85).
+
+    Hex output, NOT base64url: this value is interpolated into a DATABASE_URL,
+    and hex (0-9a-f) has no character that would need percent-encoding there.
+    base64url's `-`/`_`/`=` are a trap waiting for a URL parser."""
+    key = age_key('private', file_path)
+    digest = hmac.new(key.encode('utf-8'),
+                      f"claudecode-postgres:{cluster_name}".encode('utf-8'),
+                      hashlib.sha256).digest()
+    return digest.hex()
+
+
 # Return a list of files in the talos patches directory
 def talos_patches(value: str) -> list[str]:
     path = Path(f'templates/config/talos/patches/{value}')
@@ -387,6 +402,30 @@ class Plugin(makejinja.plugin.Plugin):
         # resolved value.
         data.setdefault('claudecode_config_storage_class',
                         data['db_storage_class'])
+        # explicit-memory PostgreSQL moved into jg-base as a base app (jgct#85).
+        # UNCONDITIONAL -- every default im has memory regardless of auth0, so
+        # this is here and NOT inside `if claudecode_auth0_enabled` (where a
+        # first draft wrongly put it: auth0:false clusters would then ship no
+        # password and memory would silently not connect).
+        if 'claudecode/postgres' in (data.get('extras') or []):
+            raise KeyError(
+                "extras contains 'claudecode/postgres', but since 2026-09-06 "
+                "the explicit-memory PostgreSQL ships from jg-base as a base "
+                "app (jgct#85). Drop it from extras -- the base app replaces it "
+                "and its Kustomization/PVCs are adopted by name.")
+        # Password derived like the cookie secret; cluster.yaml may override to
+        # rotate. The DATABASE_URL is DERIVED from it, never a field -- a
+        # hand-written URL would drift from the password it carries. Form (no
+        # port, .svc short name) matches jcom's hand-set value, measured working
+        # with memory MCP. Composed here, not in jg-base from the password,
+        # because the conditional envsubst that would need parses wrong on both
+        # branches in flux v2.7.4 (jg-base#73).
+        if not data.get('claudecode_postgres_password'):
+            data['claudecode_postgres_password'] = \
+                claudecode_postgres_password(data['cluster_name'])
+        data['claude_code_database_url'] = (
+            f"postgresql://claudecode:{data['claudecode_postgres_password']}"
+            f"@postgres.claudecode.svc/claudecode")
         # Whether the database extras render their NAS backup CronJob:
         # 'nfs' or 'none'. Derived, never declared — it is a restatement of
         # "is there a NAS", and a second copy of that fact would eventually
