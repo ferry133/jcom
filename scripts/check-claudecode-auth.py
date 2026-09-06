@@ -10,8 +10,12 @@ that scales it up removes it.
 
 Two modes, so two checks:
 
-  Auth0 (the default)   cluster.yaml must carry THIS cluster's own tenant —
-                        domain, client_id, client_secret and allowed_emails.
+  Auth0 (the default)   TWO tenants since 2026-09-06 (jgct#84). auth0.json —
+                        gitignored, factory-supplied — is the FACTORY tenant and
+                        gates the base `im`, so it is REQUIRED on every cluster,
+                        all four keys including allowed_emails. cluster.yaml's
+                        claudecode_auth0_* are the CUSTOMER tenant and are
+                        required only when claude_instances names an instance.
                         Absent, the render dies partway through with a
                         traceback; empty, it deploys an oauth2-proxy that
                         cannot start — and OIDC mode gives ttyd no fallback, so
@@ -95,72 +99,91 @@ def auth0_enabled(path: Path) -> bool:
     return yq('.claudecode_auth0', path) != "false"
 
 
+def instances(config: Path) -> list[str]:
+    """The cluster's OWN extra instances. Empty is the norm since jgct#81."""
+    raw = yq('.claude_instances // [] | .[]', config)
+    return raw.split()
+
+
 def check_auth0(config: Path) -> list[str]:
-    """cluster.yaml must carry this cluster's own tenant; auth0.json is opt-in.
+    """Two tenants since 2026-09-06 (jgct#84): factory gates im, customer gates
+    the rest.
 
-    allowed_emails counts among the required values: OIDC mode renders the
-    allowlist into a ConfigMap, and an absent one fails the render rather than
-    defaulting open.
+    auth0.json is the FACTORY tenant's file — required, not opt-in, because
+    jg-base ships the factory's support agent (`im`) on every cluster and that
+    file is its gate. cluster.yaml's claudecode_auth0_* are the CUSTOMER tenant
+    and are required only when the cluster names extra instances.
 
-    This docstring said the opposite until 2026-09-03 — "whatever cluster.yaml
-    does not override has to come from auth0.json" — sitting directly above the
-    function that now implements the reverse. It survived the `#64` sweep
-    because that sweep grepped for the words the other copies used (`shared`,
-    `same application`, `copy … another cluster`) and this one uses none of
-    them. **"I grepped" and "I grepped for the right words" read identically.**
-    Found by the acceptance reviewer; two more (cluster.sample.yaml's
-    "Overrides, rarely needed" and "Defaults to the operators listed in
-    auth0.json") were then found by listing every mention of the filename and
-    reading them, instead of searching for remembered phrasing.
+    Both directions of jgct#64's rule are enforced here, and they are mirror
+    images: auth0.json must not silently become a customer's values (the
+    original defect), and a customer's values must not silently become the
+    factory agent's gate (what #84 adds). Neither is allowed to be inferred.
+
+    allowed_emails is checked as hard as the OIDC triple: it IS the door. An
+    empty list renders a gate that admits nobody, and an unreachable rescue
+    terminal reads from outside exactly like a broken cluster — measured
+    2026-09-06, a 403 that cost an hour before anyone suspected the allowlist.
     """
-    from_config = {
-        field: yq(f'.claudecode_auth0_{field} // ""', config)
-        for field in AUTH0_FIELDS
-    }
-    emails = yq('.claudecode_allowed_emails // ""', config)
-    if all(from_config.values()) and emails:
-        return []
+    found: list[str] = []
 
-    # Reading auth0.json is opt-in since `#64`. Without the flag, a missing
-    # field is an error rather than something inherited from whichever cluster
-    # directory the file was copied out of — "forgot to set it" and
-    # "deliberately shares a tenant" used to produce identical output, and the
-    # identical output was the shared one.
-    shared = yq('.claudecode_auth0_shared // ""', config) in ("true", "True")
-    if not shared:
-        absent = [f for f in AUTH0_FIELDS if not from_config[f]]
-        if not emails:
-            absent.append("allowed_emails")
-        return [
-            "cluster.yaml is missing this cluster's own Auth0 values: "
-            + ", ".join(absent),
-            "since 2026-08-25 every cluster gets its OWN Auth0 tenant — do NOT "
-            "copy auth0.json out of another cluster directory, which is what "
-            "this message used to tell you to do",
-            "read them from this cluster's tenant into cluster.yaml, or set "
-            "`claudecode_auth0_shared: true` if it deliberately shares another "
-            "cluster's application",
-            "or set `claudecode_auth0: false` in cluster.yaml for ttyd basic auth",
-        ]
+    if yq('.claudecode_auth0_shared // ""', config) in ("true", "True"):
+        found.append(
+            "claudecode_auth0_shared is set, and it is REFUSED since "
+            "2026-09-06: it meant 'take my customer Auth0 values out of "
+            "auth0.json', and auth0.json is now the factory tenant that gates "
+            "the base im — obeying it would put a customer instance behind the "
+            "factory gate (jgct#84). Delete the flag.")
 
     auth0 = config.parent / "auth0.json"
     if not auth0.is_file():
-        return [
-            "claudecode_auth0_shared is set but auth0.json is not in this "
-            "directory — that flag is what makes reading it legitimate, and "
-            "there is nothing to read",
-        ]
-    try:
-        data = json.loads(auth0.read_text())
-    except json.JSONDecodeError as e:
-        return [f"auth0.json is not valid JSON: {e}"]
+        found.append(
+            "auth0.json is not in this cluster's directory. Since 2026-09-06 it "
+            "holds the FACTORY Auth0 tenant and gates the base im — the "
+            "factory's support agent that jg-base deploys on every cluster — so "
+            "it is required whenever claudecode_auth0 is not false. The factory "
+            "supplies it at provisioning; it stays gitignored. A cluster that "
+            "will not have an Auth0-gated terminal sets claudecode_auth0: false "
+            "and supplies ttyd_credential.")
+    else:
+        try:
+            data = json.loads(auth0.read_text())
+        except json.JSONDecodeError as e:
+            found.append(f"auth0.json is not valid JSON: {e}")
+            data = {}
+        absent = [f for f in AUTH0_FIELDS if not data.get(f)]
+        if not data.get("allowed_emails"):
+            absent.append("allowed_emails")
+        if absent:
+            found.append(
+                "auth0.json is missing or empty: " + ", ".join(absent)
+                + " — this is the factory tenant that gates the base im, and "
+                "allowed_emails is its login allowlist; an empty one locks "
+                "everyone out of the cluster's rescue terminal")
 
-    missing = [f for f in AUTH0_FIELDS if not (data.get(f) or from_config[f])]
-    if not (data.get("allowed_emails") or emails):
-        missing.append("allowed_emails")
-    if missing:
-        return [f"auth0.json is missing or empty: {', '.join(missing)}"]
-    return []
+    # The customer tenant is only required when there is a customer instance to
+    # gate. Demanding it on a cluster with `claude_instances: []` would be
+    # asking for a tenant nothing uses — all live clusters are in that state.
+    own = instances(config)
+    if own:
+        from_config = {
+            field: yq(f'.claudecode_auth0_{field} // ""', config)
+            for field in AUTH0_FIELDS
+        }
+        emails = yq('.claudecode_allowed_emails // ""', config)
+        absent = [f"claudecode_auth0_{f}" for f in AUTH0_FIELDS
+                  if not from_config[f]]
+        if not emails:
+            absent.append("claudecode_allowed_emails")
+        if absent:
+            found.append(
+                f"claude_instances names {', '.join(own)} — those are CUSTOMER "
+                "instances behind the customer's own Auth0 tenant, and "
+                "cluster.yaml is missing: " + ", ".join(absent)
+                + ". They are NOT inherited from auth0.json (that is the "
+                "factory tenant, for the base im only). Set them from this "
+                "cluster's tenant, or drop the extra instances.")
+    return found
+
 
 
 def callback_urls(config: Path) -> list[str]:

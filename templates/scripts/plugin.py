@@ -147,18 +147,29 @@ def auth0_config(file_path: str = 'auth0.json') -> dict[str, str]:
             data = json.load(file)
     except FileNotFoundError:
         raise FileNotFoundError(
-            f"File not found: {file_path} — `claudecode_auth0_shared: true` is "
-            f"set, which is the only thing that makes reading it legitimate, "
-            f"and it is not in this directory. Either put this cluster's own "
-            f"Auth0 values in cluster.yaml and drop the flag, or supply the "
-            f"shared application's auth0.json here.")
+            f"File not found: {file_path} — since 2026-09-06 (jgct#84) this is "
+            f"the FACTORY Auth0 tenant's file and it gates the base im, the "
+            f"factory's support agent that jg-base ships on every cluster. It "
+            f"is required whenever claudecode_auth0 is on (the factory supplies "
+            f"it at provisioning; it stays gitignored). A cluster that will not "
+            f"have an Auth0-gated terminal sets `claudecode_auth0: false` and "
+            f"supplies ttyd_credential instead.")
     except json.JSONDecodeError:
         raise ValueError(f"Could not decode JSON file: {file_path}")
 
-    missing = [k for k in ('domain', 'client_id', 'client_secret')
+    # allowed_emails counts among the required keys since jgct#84: it IS the
+    # base im's door. A file with the three OIDC values and no list renders a
+    # gate that admits nobody, and an unreachable rescue terminal is
+    # indistinguishable from a broken cluster.
+    missing = [k for k in ('domain', 'client_id', 'client_secret',
+                           'allowed_emails')
                if not data.get(k)]
     if missing:
-        raise KeyError(f"Missing or empty in {file_path}: {', '.join(missing)}")
+        raise KeyError(
+            f"Missing or empty in {file_path}: {', '.join(missing)}. This file "
+            f"is the factory Auth0 tenant that gates the base im (jgct#84); "
+            f"allowed_emails is the login allowlist and an empty one locks "
+            f"everyone out of the cluster's rescue terminal.")
     return data
 
 
@@ -571,40 +582,68 @@ class Plugin(makejinja.plugin.Plugin):
             # Sharing is still allowed, because a cluster may genuinely want it
             # — it just has to say so. The flag is the whole difference between
             # a decision and an accident.
-            fields = ('domain', 'client_id', 'client_secret')
-            shared = bool(data.get('claudecode_auth0_shared'))
-            missing = [f for f in fields
-                       if not data.get(f'claudecode_auth0_{f}')]
-            # The allowlist came from the same file, so dropping the fallback
-            # without this would trade a silent shared tenant for a silently
-            # empty door — oauth2-proxy admits nobody and the terminal is the
-            # cluster's rescue path.
-            if not data.get('claudecode_allowed_emails'):
-                missing.append('allowed_emails (claudecode_allowed_emails)')
-            if missing and not shared:
+            # TWO TENANTS since 2026-09-06 (jgct#84, ferry133): auth0.json is
+            # the FACTORY tenant's file, and the base im -- the factory's own
+            # support agent, shipped by jg-base on every cluster -- is gated by
+            # it. cluster.yaml's claudecode_auth0_* are the CUSTOMER tenant, for
+            # the extra instances a cluster names in claude_instances.
+            #
+            # Reading auth0.json is therefore no longer opt-in and no longer a
+            # fallback for the customer fields: it is required whenever OIDC is
+            # on, because every cluster ships the base im. `#64`'s rule is not
+            # weakened, it is pointed the other way -- it stopped auth0.json
+            # silently becoming the customer's values; this stops the customer's
+            # values silently becoming the factory agent's gate.
+            factory = auth0_config()
+            for field in ('domain', 'client_id', 'client_secret'):
+                data[f'factory_auth0_{field}'] = factory[field]
+            # The allowlist is the door itself. Absent it, oauth2-proxy admits
+            # nobody and the base im -- the rescue path for a cluster whose
+            # Omni/SideroLink is down -- is unreachable, which reads from
+            # outside exactly like a broken cluster (measured 2026-09-06: an
+            # empty list gave a 403 that looked like a deployment fault). Fail
+            # loud at render instead of fail-closed at the door.
+            data['factory_allowed_emails'] = factory['allowed_emails']
+
+            # claudecode_auth0_shared meant "read the customer fields out of
+            # auth0.json". That is now precisely the thing that must not happen,
+            # so the flag is refused rather than ignored: ignoring it would
+            # leave a cluster believing it had opted into something.
+            if data.get('claudecode_auth0_shared'):
                 raise KeyError(
-                    "claude-code Auth0 is enabled and cluster.yaml is missing: "
-                    + ", ".join(missing)
-                    + ". Since 2026-08-25 each cluster uses its OWN Auth0 "
-                    "tenant, so these are not inherited from auth0.json any "
-                    "more. Set them in cluster.yaml from this cluster's tenant, "
-                    "or — only if this cluster is deliberately sharing another "
-                    "cluster's tenant — set `claudecode_auth0_shared: true` and "
-                    "put auth0.json in this directory.")
-            # `and missing`, not `if shared` alone: the path from a shared
-            # tenant back to an own one is fill in the four values, delete
-            # auth0.json, drop the flag — and forgetting the last step used to
-            # raise FileNotFoundError over a file nothing needed. Found in
-            # acceptance review of `#64` (case c09).
-            if shared and missing:
-                auth0 = auth0_config()
-                for field in fields:
-                    data.setdefault(f'claudecode_auth0_{field}', auth0[field])
-                # cluster.yaml wins where a cluster needs someone auth0.json
-                # does not list — the client's own address, say.
-                if auth0.get('allowed_emails'):
-                    data.setdefault('claudecode_allowed_emails',
-                                    auth0['allowed_emails'])
+                    "claudecode_auth0_shared is set, but since 2026-09-06 "
+                    "(jgct#84) auth0.json is the FACTORY tenant's file and the "
+                    "base im is gated by it on every cluster. The flag used to "
+                    "mean 'take my customer values from that file', which would "
+                    "now put a customer's extra instance behind the factory "
+                    "tenant. Drop the flag; set claudecode_auth0_* only if this "
+                    "cluster names extra instances in claude_instances.")
+
+            # The customer tenant is required only when there is a customer
+            # instance to gate. Every cluster used to need these four because
+            # every cluster rendered its own im; since #81 the im is a base app
+            # and a cluster with `claude_instances: []` has nothing of its own
+            # to put behind Auth0 -- demanding them there is asking for a tenant
+            # that nothing would use (all three live clusters are in that state
+            # today). `#64` still applies to instances that DO exist: declared,
+            # never inherited.
+            if data['claude_instances']:
+                fields = ('domain', 'client_id', 'client_secret')
+                missing = [f'claudecode_auth0_{f}' for f in fields
+                           if not data.get(f'claudecode_auth0_{f}')]
+                if not data.get('claudecode_allowed_emails'):
+                    missing.append('claudecode_allowed_emails')
+                if missing:
+                    raise KeyError(
+                        "claude_instances names "
+                        f"{', '.join(data['claude_instances'])}, and those are "
+                        "CUSTOMER instances behind the customer's own Auth0 "
+                        "tenant, but cluster.yaml is missing: "
+                        + ", ".join(missing)
+                        + ". They are not inherited from auth0.json -- that "
+                        "file is the factory tenant, which gates the base im "
+                        "only (jgct#84). Set them from this cluster's own "
+                        "tenant, or drop the extra instances.")
             if not data.get('claudecode_oauth2_cookie_secret'):
                 data['claudecode_oauth2_cookie_secret'] = oauth2_cookie_secret(
                     data['cluster_name'])

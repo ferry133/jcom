@@ -367,9 +367,10 @@ import (
 	// true — the same defect #57 is about, one layer up.
 	claude_code_always_on?: [...string]
 	// Auth0 OIDC login in front of every claude-code instance. Defaults to true
-	// at render time. When on, this cluster's own claudecode_auth0_* values and
-	// claudecode_allowed_emails are REQUIRED — they are not inherited from
-	// auth0.json unless claudecode_auth0_shared says so (jgct#64).
+	// at render time. When on, the gitignored auth0.json IS REQUIRED: since
+	// 2026-09-06 (jgct#84) it holds the FACTORY tenant that gates the base im,
+	// the factory's support agent shipped on every cluster. The customer values
+	// below are required only when this cluster names its own extra instances.
 	//
 	// Setting it false does two things: swaps jg-base's claude-code-im to its
 	// empty disabled path (the base im hardwires the Auth0 sidecar, so a
@@ -383,23 +384,25 @@ import (
 	// offending value in its error, and a check that leaks the credential into
 	// a terminal and CI log to complain about it is worse than no check.
 	ttyd_credential?: string & !=""
-	// This cluster's OWN Auth0 tenant (2026-08-25 ruling). Required in practice
-	// whenever claudecode_auth0 is not false — enforced in plugin.py rather than
-	// here, because a CUE condition on an optional bool is not concrete and
-	// `cue vet` reports it against an unrelated field (measured on node_cidr,
-	// jgct#51).
+	// The CUSTOMER's Auth0 tenant, for the extra instances this cluster names in
+	// claude_instances (2026-08-25 ruling, narrowed by jgct#84). Required when
+	// there IS such an instance, not otherwise — the base im is gated by the
+	// factory tenant in auth0.json, so a cluster with claude_instances: [] needs
+	// none of these. Enforced in plugin.py rather than here: a CUE condition on
+	// an optional bool is not concrete and `cue vet` reports it against an
+	// unrelated field (measured on node_cidr, jgct#51).
 	//
-	// They are no longer inherited from auth0.json: that fallback made
-	// "forgot to set it" and "deliberately shares a tenant" identical, and the
-	// identical answer was the shared one (jgct#64). Sharing now needs
-	// claudecode_auth0_shared below.
+	// Never inherited from auth0.json. That file is the factory tenant now, and
+	// inheriting from it would put a customer's terminal behind the factory
+	// gate — the mirror image of the defect jgct#64 closed.
 	claudecode_auth0_domain?: string & !=""
 	claudecode_auth0_client_id?: string & !=""
 	claudecode_auth0_client_secret?: string & !=""
-	// Opt in to reading the three values above (and allowed_emails) from a
-	// gitignored auth0.json in this cluster's directory — i.e. this cluster
-	// deliberately shares another cluster's tenant. Absent, a missing field is
-	// an error rather than an inheritance.
+	// REFUSED since 2026-09-06 (jgct#84): plugin.py raises if this is set. It
+	// meant "take the customer values out of auth0.json", and auth0.json is now
+	// the factory tenant — obeying it would put a customer instance behind the
+	// factory gate. Kept in the schema so an old cluster.yaml fails with that
+	// explanation instead of `cue vet`'s "field not allowed".
 	claudecode_auth0_shared?: bool
 	// Derived from age.key + cluster_name at render time when absent, so it is
 	// stable across renders and distinct per cluster. Leaving it unset is the
