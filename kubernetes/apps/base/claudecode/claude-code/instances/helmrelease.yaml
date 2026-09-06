@@ -234,7 +234,7 @@ spec:
     persistence:
       claude-config:
         type: persistentVolumeClaim
-        storageClass: sc-nas
+        storageClass: local-path
         accessMode: ReadWriteOnce
         size: 5Gi
         globalMounts:
