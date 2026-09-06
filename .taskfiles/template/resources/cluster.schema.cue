@@ -343,31 +343,36 @@ import (
 	freepbx_mysql_password?: string & !=""
 	claudecode_postgres_password?: string & !=""
 	claude_code_database_url?: string
-	// claudecode/claude-code (base app on every cluster). claude_instances
-	// defaults to ["im"] at render time.
+	// claudecode/claude-code EXTRA instances. The default `im` is a static
+	// base app in jg-base since 2026-09-06 — it deploys on every re-rendered
+	// cluster with no field set here, and "im" in this list is a render error
+	// (it would fight the base HelmRelease over the same object name; rename
+	// the instance instead).
 	claude_instances?: [...string]
-	// Which claude-code instances stay running. Unset means: the one instance if
-	// claude_instances names exactly one, and NOTHING if it names more than one
-	// — the render refuses to pick and says so on stderr (#57). Each is a root
-	// shell with cluster-admin RBAC that the tunnel exposes, so a cluster that
-	// wants a specific one standing names it here. Scaling by hand instead works
-	// until the next reconcile and then disappears without an apparent cause.
+	// Which EXTRA claude-code instances stay running (the base im always
+	// does). Unset means: the one instance if claude_instances names exactly
+	// one, and NOTHING if it names more than one — the render refuses to pick
+	// and says so on stderr (#57). Each is a root shell with cluster-admin
+	// RBAC that the tunnel exposes, so a cluster that wants a specific one
+	// standing names it here. Scaling by hand instead works until the next
+	// reconcile and then disappears without an apparent cause.
 	//
 	// The value lives in templates/scripts/plugin.py (DEFAULT_CLAUDE_INSTANCES
 	// and the rule beside it). Deliberately not restated here: this comment read
 	// "Empty by default" and stayed readable for a day after that stopped being
 	// true — the same defect #57 is about, one layer up.
-	//
-	// A list rather than a flag because clusters do mix: jcom keeps `im` up for
-	// support and leaves `cc` at zero until it is needed.
 	claude_code_always_on?: [...string]
 	// Auth0 OIDC login in front of every claude-code instance. Defaults to true
 	// at render time. When on, this cluster's own claudecode_auth0_* values and
 	// claudecode_allowed_emails are REQUIRED — they are not inherited from
 	// auth0.json unless claudecode_auth0_shared says so (jgct#64).
 	//
-	// Setting it false falls back to ttyd basic auth, which then needs
-	// ttyd_credential — checked by scripts/check-claudecode-auth.py.
+	// Setting it false does two things: swaps jg-base's claude-code-im to its
+	// empty disabled path (the base im hardwires the Auth0 sidecar, so a
+	// basic-auth base im cannot exist — Flux prunes it, the retain:true PVCs
+	// survive), and falls back to ttyd basic auth for the cluster's own
+	// claude_instances, which then needs ttyd_credential — checked by
+	// scripts/check-claudecode-auth.py.
 	claudecode_auth0?: bool
 	// Only used when claudecode_auth0 is false. Strength is checked by
 	// scripts/check-claudecode-auth.py, not here: a CUE constraint prints the

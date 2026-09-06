@@ -1,8 +1,12 @@
-# claude-code is a base app: every cluster gets one instance. "im" is the
-# default name (im.${SECRET_DOMAIN}); rename it or add more via
-# claude_instances in cluster.yaml -- jg-jiahd overrides it to "cc"
-# (cc.jiahd.cc). The shared manifests (namespace, SA/RBAC, OCIRepository,
-# secrets) come from jg-base kubernetes/apps/base/claudecode.
+# claude-code EXTRA instances only, since 2026-09-06: the default `im`
+# HelmRelease is static and lives in jg-base
+# (kubernetes/apps/base/claudecode/claude-code/im/), switched on by the
+# claude-code-im patch in flux/cluster/ks.yaml.j2. Declaring "im" here is a
+# render error (plugin.py) -- it would fight the base object over its name.
+# Use claude_instances for renamed/additional terminals (jg-jiahd's "cc") and
+# for the basic-auth instance a claudecode_auth0:false cluster needs. The
+# shared manifests (namespace, SA/RBAC, OCIRepository, secrets) come from
+# jg-base kubernetes/apps/base/claudecode.
 #% for instance in claude_instances %#
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -44,7 +48,7 @@ spec:
           app:
             image:
               repository: ghcr.io/ferry133/claude-code
-              tag: 8228f58
+              tag: 9418571
             env:
               # The pod runs as uid 0 (see defaultPodOptions), which would
               # resolve HOME=/root -- but all state (claude config PVC,
@@ -160,7 +164,7 @@ spec:
             # jg-base for the full design.
             image:
               repository: ghcr.io/ferry133/claude-code
-              tag: 8228f58
+              tag: 9418571
             command: ["python3", "/usr/local/bin/talos_mcp_server.py"]
             env:
               TALOSCONFIG: /etc/talos-mcp/talosconfig
@@ -345,16 +349,16 @@ spec:
    holding it have no reason to live on different volumes. Moving this PVC moves
    both, which is why claudecode_config_storage_class is one knob and not two.
 
-   Its default is `default_storage_class` -- TODAY'S value, so merging this
-   moves nobody. That is deliberate and it is not what a "block tier by default"
-   reading would give: `storageClassName` is immutable, so a changed default
-   does not migrate anything, it renders a PVC the cluster cannot accept, on
-   every cluster at once, at whatever moment each next runs `task configure`.
+   Its default is `db_storage_class` -- the block tier (#76, 2026-09-05
+   ruling: claude's memory never lives on NFS). gnome-keyring's file locking
+   and claude's small frequent writes lose the same argument against NFS that
+   databases do.
 
-   The block tier IS the right destination -- gnome-keyring's file locking and
-   claude's small frequent writes lose the same argument against NFS that
-   databases do. But a cluster gets there by the copy procedure in
-   cluster.sample.yaml, one at a time, with the archive taken first. #|
+   Safe only because every pre-ruling cluster migrated first (by the copy
+   procedure in cluster.sample.yaml, archive taken first) and wrote its class
+   into cluster.yaml: `storageClassName` is immutable, so a changed default
+   migrates nothing -- on an unmigrated cluster it renders a PVC the cluster
+   cannot accept, which is why #76 waited for the migration issues to close. #|
       claude-config:
         type: persistentVolumeClaim
         storageClass: #{ claudecode_config_storage_class }#

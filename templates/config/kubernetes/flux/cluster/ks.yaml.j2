@@ -181,7 +181,8 @@ spec:
 #|   The mirror of the loop above: things jg-base ships SUSPENDED, that this
      cluster switches on.
 
-     Only one so far. longhorn-backup applies a RecurringJob that writes to
+     Two so far: longhorn-backup and claude-code-im (appended below, in that
+     order). longhorn-backup applies a RecurringJob that writes to
      `longhorn_backup_target`; with no target it is not idle, it runs and fails
      nightly, and on a cluster without Longhorn it applies against a CRD no
      chart installs. So jg-base ships it off and the fact that this cluster
@@ -219,11 +220,33 @@ spec:
      daily-check to trip over. #|
 #% set _ = _enabled.append((
      'longhorn-backup',
+     './kubernetes/apps/base/storage/longhorn/backup',
      'enabled' if (longhorn_backup_target is defined and longhorn_backup_target) else 'disabled',
      'longhorn_backup_target is set, so there is somewhere for the RecurringJob to write'
         if (longhorn_backup_target is defined and longhorn_backup_target)
         else 'no longhorn_backup_target: an empty path so Flux prunes the RecurringJob, rather than a suspend that would strand it')) %#
-#% for name, position, why in _enabled %#
+#|   claude-code-im: the default im.<domain> terminal, whose HelmRelease lives
+     in jg-base since 2026-09-06 (this template renders extra instances only).
+     Same always-emitted two-position switch as longhorn-backup, opposite
+     polarity: jg-base ships it suspend:true so a user repo still rendering
+     the pre-2026-09 per-user `im` never fights the base object, and THIS
+     patch existing is what turns the base im on. Re-rendering is therefore
+     the migration: the same commit that stops emitting the per-user im emits
+     this patch.
+
+     Keyed on claudecode_auth0_enabled because the base im hardwires the
+     oauth2-proxy sidecar -- a static manifest cannot swap auth structures.
+     A cluster on basic auth gets the disabled (empty) path: Flux prunes the
+     base HelmRelease if it ever ran (the PVCs carry retain:true and survive),
+     and the cluster's own basic-auth instance renders from claude_instances. #|
+#% set _ = _enabled.append((
+     'claude-code-im',
+     './kubernetes/apps/base/claudecode/claude-code/im',
+     'enabled' if claudecode_auth0_enabled else 'disabled',
+     'the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front'
+        if claudecode_auth0_enabled
+        else 'claudecode_auth0 is false and the base im hardwires the Auth0 sidecar: an empty path so Flux prunes it, while the basic-auth instance renders from claude_instances')) %#
+#% for name, basepath, position, why in _enabled %#
     # #{ 'enabled' if position == 'enabled' else 'disabled (empty path, so anything previously applied is pruned)' }#: #{ why }#
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -233,7 +256,7 @@ spec:
           namespace: flux-system
         spec:
           suspend: false
-          path: ./kubernetes/apps/base/storage/longhorn/backup/#{ position }#
+          path: #{ basepath }#/#{ position }#
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
