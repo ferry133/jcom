@@ -31,6 +31,14 @@ spec:
   values:
     controllers:
       #{instance}#:
+#% if talos_mcp_config is defined %#
+        # The talos-mcp sidecar below holds the Omni SA key in talos-mcp-secret;
+        # this is when that key expires, for jg-base's daily-check row 24
+        # (ferry133/fleet-ops#11) -- the same annotation jg-base puts on the
+        # base im. On the controller, not the pod: a new date restarts nothing.
+        annotations:
+          jg-base.jiahd.cc/omni-sa-key-expires: "${TALOS_MCP_SA_KEY_EXPIRES:-}"
+#% endif %#
         strategy: Recreate
         # A LAN-facing root shell with network-scanning capability and
         # cluster-admin RBAC (see rbac.yaml in the jg-base claudecode app), so

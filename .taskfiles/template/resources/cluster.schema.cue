@@ -433,6 +433,13 @@ import (
 	talos_mcp_config?: string & !=""
 	talos_mcp_sa_key?: string & !=""
 	talos_mcp_omni_endpoint?: string & !=""
+	// When talos_mcp_sa_key expires, YYYY-MM-DD: the expiry picked when the
+	// service account was created (step 1 of the talos-mcp notes in
+	// cluster.sample.yaml). jg-base's daily-check row 24 reads it and warns 30
+	// days out (ferry133/fleet-ops#11). A date, not a credential, so a format
+	// constraint here cannot print anything sensitive. plugin.py refuses a key
+	// without a date, and a date without a key.
+	talos_mcp_sa_key_expires?: =~"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 	// factory provisioning credentials (extras/factory/factory in jg-base).
 	// Only the cluster that hosts factory sets these -- jcom today. Every one is
 	// optional and renders empty elsewhere, which is what the consuming Secret
@@ -459,6 +466,9 @@ import (
 	// field is a scalar.
 	factory_omni_sa_key?:            string & !=""
 	factory_omni_endpoint?:          string & !=""
+	// factory_omni_sa_key's expiry -- a date, not a fifth credential. Same
+	// contract as talos_mcp_sa_key_expires above.
+	factory_omni_sa_key_expires?:    =~"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 	factory_github_token?:           string & !=""
 	factory_fleet_ops_deploy_key?:   string & !=""
 	postgres_password?: string & !=""
