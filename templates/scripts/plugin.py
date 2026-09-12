@@ -301,7 +301,14 @@ class Plugin(makejinja.plugin.Plugin):
         # key this cluster does not hold. Both are refused here -- the one place
         # that sees the key and the date together. The messages name fields,
         # never values: these fields sit next to credentials.
-        for key_field in ('talos_mcp_sa_key', 'factory_omni_sa_key'):
+        # factory_github_token joined them for ferry133/jg-base#99: same
+        # shape, worse timing. An expired Omni key breaks a diagnostic tool;
+        # an expired PAT breaks provisioning halfway through creating a
+        # customer's repo. It is also the weakest of the three to revoke —
+        # a fine-grained PAT has no key id — which is why daily-check row 25
+        # says that in its own output.
+        for key_field in ('talos_mcp_sa_key', 'factory_omni_sa_key',
+                          'factory_github_token'):
             exp_field = f'{key_field}_expires'
             exp = data.get(exp_field)
             # makejinja loads cluster.yaml with yaml.safe_load_all, which reads

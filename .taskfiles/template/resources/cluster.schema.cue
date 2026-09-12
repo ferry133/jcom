@@ -470,6 +470,10 @@ import (
 	// contract as talos_mcp_sa_key_expires above.
 	factory_omni_sa_key_expires?:    =~"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 	factory_github_token?:           string & !=""
+	// When that PAT expires. Same contract as the two above; jg-base's
+	// daily-check row 25 reads it (ferry133/jg-base#99). GitHub shows the
+	// expiry when the token is issued, and reports it in a response header.
+	factory_github_token_expires?:   =~"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
 	factory_fleet_ops_deploy_key?:   string & !=""
 	postgres_password?: string & !=""
 	trello_api_key?: string
