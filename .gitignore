@@ -40,3 +40,48 @@ config.gen/nodes.yaml
 # jg-jiahd 的 .gitignore 都有 omniconfig*，這裡漏了。用 glob 不用精確檔名：
 # 同一份檔案的第 32 行就是「規則寫死路徑、檔案在別的目錄」那次外洩留下的補丁。
 omniconfig*
+
+# ── 2026-09-16：補齊與 jg-cluster-template 的三個整類差距 ──────────────────────
+#
+# 規則由「被保護的是什麼」決定，不由某個人想得到的檔名決定——這是 jcom 與
+# jg-jiahd 那次外洩留下的教訓（規則寫 `/cluster.yaml`，檔案躺在
+# `config.gen/cluster.yaml`，路徑寫死的規則與路徑寫死的檢查一起通過）。
+# 本檔第 32 行與第 38 行各是那個教訓的一次補丁；這一段是第三次，
+# 這次是照著模板逐條求值比對出來的，不是想到什麼加什麼。
+#
+# 量測（2026-09-16，FO-runbook [5fe39a]，ferry133 授權）：由模板每一條
+# 非目錄樣式反推一條代表路徑，母體 40 條，本檔當時漏 24 條。
+
+# Talos 加密前的秘密材料。加密過的那份要進 git，所以要否定規則放行。
+talsecret*.yaml
+!talsecret*.sops.yaml
+secrets.yaml
+
+# 由 cluster.yaml 衍生的東西，帶著 cluster.yaml 的憑證。
+# `.merged-config.yaml` 是 `task configure` 把 cluster.yaml 與 nodes.yaml 合起來
+# 給 `cue vet` 看的中間檔，幾秒後刪掉——除非驗證失敗，而那正是操作員在反覆
+# 編輯、最可能 `git add -A` 的時刻。2026-08-22 在 jg-janncotcc（public）實際
+# 發現過：檔案在、明文 cloudflare_token 在、不被任何規則命中。
+.merged-config.yaml
+*merged-config*
+
+# 把既有的精確檔名放寬成 glob，並解除根目錄錨定——同一份東西換個目錄或換個
+# 後綴就是「沒人預料到的檔名」。
+*cluster.yaml
+nodes.yaml
+talosconfig*
+*.agekey
+age*.txt
+auth0.json
+cloudflare-tunnel.json
+github-deploy.key*
+github-push-token.txt
+trello-notifier.yaml
+
+# ⚠️ 兩個合法追蹤中的檔會被上面的 glob 掃到，例外寫在這裡（ferry133 2026-09-16
+# 裁定）。它們不是憑證：一個是 Talos machine patch，一個是測試 fixture，只是
+# 名字撞到。已追蹤的檔本來就不受 .gitignore 影響，寫出來是為了
+# (a) 刪掉再加回來時不會突然消失，(b) 讓讀的人知道這不是漏網而是判斷過的。
+# 否定規則要放在最後：後面的樣式蓋前面的。
+!.github/tests/nodes.yaml
+!talos/patches/controller/cluster.yaml
