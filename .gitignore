@@ -31,8 +31,11 @@ talosconfig
 Thumbs.db
 config.gen/cluster.yaml
 config.gen/nodes.yaml
-# Any armored key. pub-key.asc stays tracked because gitignore does not affect
-# already-tracked files -- it is a public key and that is deliberate.
+# Any armored key. pub-key.asc is a public key and stays tracked deliberately;
+# it now has an explicit `!pub-key.asc` at the bottom of this file
+# (ferry133 2026-09-17). This comment used to say it was safe because
+# "gitignore does not affect already-tracked files" -- true, but that is a
+# premise that expires the moment the file is deleted and re-added.
 *.asc
 
 # 2026-08-28: omniconfig.yaml 在磁碟上、未追蹤、而且沒有任何規則涵蓋它——這個 repo
@@ -85,3 +88,12 @@ trello-notifier.yaml
 # 否定規則要放在最後：後面的樣式蓋前面的。
 !.github/tests/nodes.yaml
 !talos/patches/controller/cluster.yaml
+
+# 第三個同類（ferry133 2026-09-17 裁定）。它被上面第 36 行的 `*.asc` 命中，
+# 成因是既有規則不是這次新增的 glob，所以上一輪沒有動它。
+# 已斷言它真的是公鑰：檔頭是 `-----BEGIN PGP PUBLIC KEY BLOCK-----`，
+# 全檔 `PRIVATE` 出現 0 次。公開是刻意的。
+# 寫出來的理由與上面兩個相同，而本檔第 34-35 行那句正是它需要被寫出來的原因：
+# 「gitignore 不影響已追蹤的檔」是真的，但那是一個會失效的前提——
+# 刪掉再加回來時，那句話就不再保護它了。
+!pub-key.asc
