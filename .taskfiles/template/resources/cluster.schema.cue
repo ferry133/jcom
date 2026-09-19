@@ -9,9 +9,29 @@ import (
 	// Who this cluster is for. No default: an unmigrated config must fail here
 	// rather than be rendered under an assumed profile.
 	//   appliance  zero customer-supplied fields; single node; operator-managed
-	//   prosumer   customer has a NAS and some infrastructure of their own
 	//   full       expert operates it directly; today's behaviour
-	deployment_profile: "appliance" | "prosumer" | "full"
+	deployment_profile: "appliance" | "full"
+
+	// `prosumer` was removed 2026-09-16 (#158). It was in this enum for as long
+	// as the enum existed, and **nothing ever read it**: every profile
+	// comparison in the template — schema, `ks.yaml.j2`, `plugin.py` — asks only
+	// whether the value is `appliance`, so `prosumer` and `full` rendered
+	// byte-identically. A third name that produces the second name's cluster is
+	// worse than two names, because README and cluster.sample.yaml described a
+	// difference and people choose from descriptions.
+	//
+	// A config still carrying it now fails `cue vet` here, which is the point.
+	// CUE's own message already names the value and where it came from:
+	//
+	//   deployment_profile: conflicting values "appliance" and "prosumer"
+	//       cluster.schema.cue:13:22
+	//       cluster.yaml:36:21
+	//
+	// An `if deployment_profile == "prosumer"` branch carrying a friendlier
+	// sentence was written here and removed: the disjunction fails before any
+	// `if` is evaluated, so that branch never ran. It would have been a guard
+	// that cannot fire, which reads like coverage and is not. Measured, not
+	// assumed — the hint never appeared in the output.
 
 	// Where stateful data lives. Databases always want block storage regardless
 	// of this — it selects what bulk media and file shares use.
@@ -102,7 +122,27 @@ import (
 	// node list — but an Omni-provisioned cluster renders `nodes: []`, so it must
 	// declare this or be treated as having peers. Components that need peers
 	// (a peer-to-peer image mirror, for one) are suspended when this is true.
-	single_node?: bool
+	// NOT optional, and that is the fix for jgct#151. CUE refuses to reference an
+	// optional field from a condition — `cannot reference optional field:
+	// single_node` — so the two `if single_node == true` guards above died on
+	// every config that did not set it, which is every `full`/`prosumer` config:
+	// exactly the ones those guards exist for. `appliance` was unaffected only
+	// because it is forced `true` below, which is why nobody saw it until a real
+	// delivery. **A guard that errors instead of judging is not a guard.**
+	//
+	// ⚠️ The default is `false` and that is **narrower than `plugin.py`'s
+	// fallback**, which also derives single-node from the node count on the
+	// manual path. That arm cannot be mirrored here: `nodes` is not in this
+	// schema's scope (measured 2026-09-15 — `reference "nodes" not found`). So
+	// on `provisioning_path: "talos"` with one node and no explicit
+	// `single_node`, the two guards above do **not** fire while `plugin.py`
+	// still treats the cluster as single-node. Declare `single_node` on that
+	// path rather than relying on either default.
+	//
+	// A CUE default never reaches makejinja — it reads `cluster.yaml` — so this
+	// does not add the key to the rendered config. It only makes the value
+	// concrete for validation.
+	single_node: bool | *false
 
 	// local-path volumes live in a directory on one node and the PV carries node
 	// affinity to it. On a single node that is simply correct. On more than one
@@ -177,14 +217,25 @@ import (
 	if _uses_node_local {
 		single_node: bool
 		if single_node == false {
-			// `bool` and not `true`: an unresolved type is what makes an absent
-			// field fail validation. Asserting the value here instead would let
-			// CUE satisfy the requirement on the reader's behalf, and the check
-			// would pass without anyone having read it.
-			accept_node_pinning: bool
-			if accept_node_pinning == false {
-				accept_node_pinning: _|_
-			}
+			// Not plain `true`: an unresolved value is what makes an absent field
+			// fail validation, and asserting the value here would let CUE satisfy
+			// the requirement on the reader's behalf. Measured, not assumed
+			// (jgct#162): schema `x: true` against data with no `x` exits 0.
+			//
+			// `matchN` and not `bool` plus `if … == false { _|_ }` (jgct#162):
+			// the three outcomes are identical — absent fails, `false` fails,
+			// `true` passes — but that form named no field in either failure.
+			// An absent field read `non-concrete value bool in operand to ==`
+			// and a `false` one read `explicit error (_|_ literal) in source`,
+			// each followed only by line numbers in this file, so the operator
+			// had to read the schema to learn which box he left empty. `matchN`
+			// is a validator, so it stays unresolved while an absent field is
+			// still absent, and both messages now start with the field name —
+			// the same property `backup_r2_bucket: string & !=""` has always had.
+			// A `!=` bound would be the obvious analogue and does not work here:
+			// `!=false` rejects `true` as well, because the bound's own operand
+			// must be ordered and a bool is not.
+			accept_node_pinning: bool & matchN(1, [true])
 		}
 	}
 
@@ -244,12 +295,45 @@ import (
 
 	// Setting one of these on an appliance is a mistake worth catching: it looks
 	// like it configures something but nothing reads it.
+	//
+	// `matchN(0, [_])` and not `_|_` (jgct#164). Both reject the field; they
+	// differ in what the operator is told. `_|_` produced the whole message:
+	//
+	//     explicit error (_|_ literal) in source:
+	//         ./cluster.schema.cue:288:30
+	//
+	// — a schema line number and no field name, so the operator had to open
+	// this file to learn which of the five he had filled in. `matchN` names it:
+	//
+	//     cluster_api_addr: invalid value "10.9.9.2" (does not satisfy matchN):
+	//         1 matched, expected 0
+	//
+	// Measured on 2026-09-16 against `main` 9597b32d with cue v0.15.4 (the
+	// version pinned in .mise.toml), one legal appliance config plus exactly
+	// one forbidden field, five times. Before: four fields named nothing, and
+	// `mqtt_lb_ip` named itself. After: all five name themselves.
+	//
+	// ⚠️ `mqtt_lb_ip` was NOT the one that already worked. It named itself by
+	// accident: its second declaration further down carries `& !=""`, and the
+	// `_|_` poisoned that bound's left operand, which incidentally printed the
+	// field name. A throwaway mutation removing that `& !=""` dropped it to
+	// zero field names like the other four — so the one case that looked
+	// correct was one unrelated edit away from silently joining them. With
+	// `matchN` the same mutation leaves it naming itself: the guard now stands
+	// on its own. That bound is another field's constraint in another block
+	// and is deliberately left alone; the mutation was an experiment, not a
+	// change.
+	//
+	// Both directions were exercised. Making the guard unconditional (so it
+	// also applies to `full`, where four of these are REQUIRED) turns the
+	// legal-`full` control red — which is what says that control can fail at
+	// all. A guard that cannot over-fire has an untested negative control.
 	if deployment_profile == "appliance" {
-		cluster_api_addr?:         _|_
-		cluster_gateway_addr?:     _|_
-		cluster_dns_gateway_addr?: _|_
-		cloudflare_gateway_addr?:  _|_
-		mqtt_lb_ip?:               _|_
+		cluster_api_addr?:         matchN(0, [_])
+		cluster_gateway_addr?:     matchN(0, [_])
+		cluster_dns_gateway_addr?: matchN(0, [_])
+		cloudflare_gateway_addr?:  matchN(0, [_])
+		mqtt_lb_ip?:               matchN(0, [_])
 	}
 	repository_name: string & !="" & !="ferry133/xxxxxx" & !="ferry133/jg-base"
 	repository_branch?: string & !=""
@@ -270,6 +354,23 @@ import (
 	base_repo_ref_kind: *"branch" | "tag" | "semver" | "commit"
 	cloudflare_domain: net.FQDN
 	cloudflare_token: string
+	// How cloudflared reaches Cloudflare's edge.
+	//
+	// Default "quic" is UDP 7844. Some networks — measured on jg-jiahd — block
+	// outbound UDP while TCP 443 works, and cloudflared then CrashLoopBackOffs
+	// with `Failed to dial a quic connection: timeout: handshake did not complete
+	// in time`. It is not a token problem and rotating the token does not help;
+	// it produces a new credential and the identical crash.
+	//
+	// This exists as a field because the documented fix used to be a nested
+	// patch pasted by hand into this repo's rendered ks.yaml — which meant the
+	// repair lived only in whichever clone someone had pasted it into, and the
+	// next `task configure` by anyone else silently undid it. A value survives a
+	// re-render; an edit to a generated file does not.
+	//
+	// Left per-cluster rather than changed in jg-base: every other cluster's QUIC
+	// works, and http2 carries a real bandwidth cost.
+	cloudflare_tunnel_transport?: "quic" | "http2"
 	github_webhook_token?: string & !=""
 	// Cilium native routing instead of the default vxlan tunnel.
 	//
@@ -308,6 +409,11 @@ import (
 	// so losing the disk loses the database and the agent's accumulated context.
 	// Required there rather than opt-in: rendering a cluster whose data is
 	// unprotected should not be possible.
+	// `backup_r2_endpoint` is declared again (jgct#182). jgct#180 made it a
+	// constant in the template and this block rejected it with `field not
+	// allowed`; that lasted two hours. There are two stores, and which one a
+	// cluster uses is decided per site — so the host cannot live in the
+	// template, and this field is where it arrives.
 	backup_r2_bucket?: string & !=""
 	backup_r2_endpoint?: string & !=""
 	backup_r2_access_key_id?: string & !=""
@@ -326,11 +432,10 @@ import (
 	age_key_escrowed?: bool
 
 	if deployment_profile == "appliance" {
-		// `bool` and not `true`: an absent field must fail validation.
-		age_key_escrowed: bool
-		if age_key_escrowed == false {
-			age_key_escrowed: _|_
-		}
+		// An absent field must fail validation, and the message must say which
+		// field. See accept_node_pinning above for why this is neither plain
+		// `true` nor `bool` plus `if … == false { _|_ }` (jgct#162).
+		age_key_escrowed: bool & matchN(1, [true])
 		backup_r2_bucket: string & !=""
 		backup_r2_endpoint: string & !=""
 		backup_r2_access_key_id: string & !=""
