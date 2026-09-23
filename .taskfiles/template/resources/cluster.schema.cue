@@ -188,7 +188,15 @@ import (
 	// claude-code's config PVC — ~/.claude and the keyring it holds, one volume
 	// because a token and the keyring holding it have no reason to be apart.
 	//
-	// Defaults to default_storage_class (today's value), NOT to db_storage_class.
+	// Defaults to db_storage_class — the block tier — since 2026-09-05 (#76):
+	// claude's auto memory and the keyring never live on NFS. This comment said
+	// `default_storage_class` until 2026-09-23 and had been false since #76
+	// landed; `plugin.py`'s setdefault and
+	// `scripts/check-claude-config-storage-default.py` were the true copies, and
+	// `#191` was written quoting this one. The corrected reading is measured, not
+	// re-read: on an NFS cluster with nothing declared the render produces
+	// default=sc-nas, db=local-path, config=local-path.
+	//
 	// `storageClassName` is immutable, so pointing a default somewhere else does
 	// not migrate a cluster, it renders a PVC the cluster cannot accept. Naming
 	// a class here is how a cluster records where it is — including recording
@@ -200,6 +208,33 @@ import (
 	// provisioner archives rather than deletes; on local-path and
 	// longhorn-static the reclaim policy is Delete and nothing catches it.
 	claudecode_workspace?: bool
+	// claude-code's workspace PVC (20Gi, /home/claude/workspace). Defaults to
+	// default_storage_class — the bulk tier, which is what it was before this
+	// field existed, so an existing cluster that does not name it renders
+	// byte-identically (#191).
+	//
+	// It exists because that default is not safe to FOLLOW. `storageClassName`
+	// is immutable on a bound claim, so flipping storage_backend on a cluster
+	// that already has a workspace PVC does not migrate it — the helm upgrade
+	// fails `spec is immutable after creation`, retries three times, and the
+	// HelmRelease stops converging for good. Measured on the bench 2026-09-22
+	// (`#191`): local-path → longhorn wedged `claudecode/im` exactly that way;
+	// Helm rolled back so nothing stopped serving, which is why the only symptom
+	// is a Kustomization that never goes Ready again.
+	//
+	// So a cluster deploying Longhorn under an existing workspace pins the
+	// workspace here, at its CURRENT class, and moves it later out of band if it
+	// wants to. There is no migration procedure for this PVC yet — fleet-ops
+	// `docs/operations/node-scaling.md` A5 records that, and it is not this
+	// field's job to invent one.
+	//
+	// ⚠️ Today this field reaches EXTRA instances only (claude_instances). The
+	// default `im` takes its workspace class from jg-base's static HelmRelease,
+	// which still reads ${DEFAULT_STORAGE_CLASS} — see the note on
+	// CLAUDECODE_WORKSPACE_STORAGE_CLASS in
+	// templates/config/kubernetes/components/sops/cluster-secrets.sops.yaml.j2
+	// for the ordering that changes that, and ferry133/jg-base#136.
+	claudecode_workspace_storage_class?: string & !=""
 
 	// Whether anything in this cluster lands on a node-local class. This, and
 	// not `storage_backend`, is what the acknowledgement below has to be keyed

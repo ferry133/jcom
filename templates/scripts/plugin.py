@@ -493,6 +493,21 @@ class Plugin(makejinja.plugin.Plugin):
         # provisioner's archiveOnDelete catches it, on local-path and
         # longhorn-static nothing does.
         data.setdefault('claudecode_workspace', True)
+        # Where the workspace PVC lands. Defaults to default_storage_class —
+        # what the template rendered verbatim before this field existed, so a
+        # cluster that does not name it renders byte-identically (#191).
+        #
+        # A separate knob from the default because the default is not safe to
+        # FOLLOW: storageClassName is immutable on a bound claim, so flipping
+        # storage_backend under an existing workspace PVC wedges the helm
+        # upgrade (`spec is immutable after creation`) and the HelmRelease
+        # stops converging. Measured on the bench 2026-09-22, #191.
+        #
+        # Must sit AFTER the default_storage_class setdefault above — it reads
+        # the resolved value. Same ordering constraint, same reason, as
+        # claudecode_config_storage_class reading db_storage_class below.
+        data.setdefault('claudecode_workspace_storage_class',
+                        data['default_storage_class'])
         # The block tier, for anything that needs fsync durability and file
         # locking. Not derived from storage_backend: NFS is never a valid answer
         # here, whatever the cluster uses for bulk data. An existing cluster
