@@ -387,7 +387,7 @@ spec:
 #% if claudecode_workspace %#
       claude-workspace:
         type: persistentVolumeClaim
-        storageClass: #{ default_storage_class }#
+        storageClass: #{ claudecode_workspace_storage_class }#
         accessMode: ReadWriteOnce
         size: 20Gi
         globalMounts:
