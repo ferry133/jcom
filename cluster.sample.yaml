@@ -189,6 +189,43 @@ storage_backend: "nfs"
 # a workspace on the next `task configure`.
 # claudecode_workspace: true
 #
+# (OPTIONAL) Which class the 20Gi workspace PVC uses. Defaults to whatever
+# storage_backend gives — that is what it did before this field existed, so
+# leaving it out changes nothing on an existing cluster.
+#
+# ⚠️ READ THIS BEFORE CHANGING storage_backend ON A LIVE CLUSTER. A PVC's
+# storageClassName is IMMUTABLE once bound, so switching the bulk tier under an
+# existing workspace does not move it. What happens instead, measured on the
+# bench 2026-09-22 (#191), local-path -> longhorn:
+#
+#   Helm upgrade failed for release claudecode/im ...
+#   PersistentVolumeClaim "im-claude-workspace" is invalid: spec: Forbidden:
+#   spec is immutable after creation ...
+#     - "StorageClassName": "local-path",
+#     + "StorageClassName": "longhorn",
+#
+# Three retries, then Stalled=True RetriesExceeded. Helm rolls back, so the
+# terminal keeps serving and nothing looks broken — the HelmRelease simply
+# never converges again, and no pod restart tells you.
+#
+# So when you deploy Longhorn (or move to a NAS) on a cluster that ALREADY has
+# a workspace PVC: pin this field to the class the PVC is on TODAY, in the same
+# commit that changes storage_backend. Read it off the cluster, do not remember
+# it:
+#   kubectl --kubeconfig ./kubeconfig-sa -n claudecode get pvc im-claude-workspace \
+#     -o jsonpath='{.spec.storageClassName}'
+#
+# There is NO procedure for moving this PVC afterwards, and it is not in the
+# offline backup (fleet-ops docs/operations/node-scaling.md A5). Pinning is
+# the whole answer for now; the workspace is scratch space, and the thing worth
+# keeping — ~/.claude — is claudecode_config_storage_class above.
+#
+# ⚠️ Today this reaches the EXTRA instances named in claude_instances. The
+# default `im` still takes its workspace class from jg-base
+# (${DEFAULT_STORAGE_CLASS}); ferry133/jg-base#136 is what changes that, and
+# until it lands pinning this field does not protect `im`.
+# claudecode_workspace_storage_class: "local-path"
+#
 # Wherever Longhorn is installed — storage_backend "replicated" or
 # replicated_storage above — set this to "longhorn". Installing Longhorn does not
 # move the database onto it by itself. Forgetting is caught rather than silent:

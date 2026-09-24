@@ -322,10 +322,40 @@ import (
 	cloudflare_gateway_addr?:  net.IPv4
 
 	if deployment_profile != "appliance" {
-		cluster_api_addr:         net.IPv4
-		cluster_gateway_addr:     net.IPv4 & !=cluster_api_addr & !=cluster_dns_gateway_addr & !=cloudflare_gateway_addr
-		cluster_dns_gateway_addr: net.IPv4 & !=cluster_api_addr & !=cluster_gateway_addr & !=cloudflare_gateway_addr
-		cloudflare_gateway_addr:  net.IPv4 & !=cluster_api_addr & !=cluster_gateway_addr & !=cluster_dns_gateway_addr
+		// ⚠️ `cluster_api_addr` is required on the **talos** path only — jgct#188.
+		//
+		// The sentence above ("the API is reached through the Omni proxy") is
+		// the right reason attached to the wrong axis. It is true of
+		// `provisioning_path: "omni"`, not of `deployment_profile:
+		// "appliance"` — a `full` + `omni` cluster reaches the API through the
+		// same proxy, renders no talconfig and gets no VIP, and was still
+		// being asked for an address.
+		//
+		// Measured on `031769b` before changing it: the only consumers are in
+		// `talconfig.yaml.j2` (endpoint, certSANs, two VIPs — all talos-path),
+		// plus `cluster-secrets.sops.yaml.j2` copying it into a Secret that
+		// nothing substitutes. jg-base has two mentions and neither is a
+		// consumer; `scripts/check-sample-subset-claim.sh` says so in words.
+		// Positive control for that grep: `CLUSTER_GATEWAY_ADDR`, 4 hits.
+		//
+		// Declaring it on the omni path stays **allowed**, only not required:
+		// every `full` + `omni` repo that exists today has a value there, and
+		// rejecting it (the `matchN(0, [_])` treatment appliance gets) would
+		// fail their next `task configure` over a field that harms nothing.
+		if provisioning_path == "talos" {
+			cluster_api_addr: net.IPv4
+			// The distinctness clauses that mention it live here too: on the
+			// omni path the field may be absent, and `!=cluster_api_addr`
+			// against an absent optional is the jgct#151 shape — it fails
+			// with `non-concrete value cluster_api_addr for bound !=`, which
+			// names the *other* three fields and never the missing one.
+			cluster_gateway_addr:     net.IPv4 & !=cluster_api_addr
+			cluster_dns_gateway_addr: net.IPv4 & !=cluster_api_addr
+			cloudflare_gateway_addr:  net.IPv4 & !=cluster_api_addr
+		}
+		cluster_gateway_addr:     net.IPv4 & !=cluster_dns_gateway_addr & !=cloudflare_gateway_addr
+		cluster_dns_gateway_addr: net.IPv4 & !=cluster_gateway_addr & !=cloudflare_gateway_addr
+		cloudflare_gateway_addr:  net.IPv4 & !=cluster_gateway_addr & !=cluster_dns_gateway_addr
 	}
 
 	// Setting one of these on an appliance is a mistake worth catching: it looks
