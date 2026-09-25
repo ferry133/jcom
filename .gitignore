@@ -27,6 +27,7 @@ talosconfig
 .private/
 .task/
 .venv/
+__pycache__/
 .DS_Store
 Thumbs.db
 config.gen/cluster.yaml
