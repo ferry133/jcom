@@ -26,3 +26,5 @@ TALOSCONFIG = "{{config_root}}/talos/clusterconfig/talosconfig"
 "aqua:siderolabs/talos" = "1.12.4"
 "aqua:yannh/kubeconform" = "0.7.0"
 kustomize = "5.7.1"
+# jcom-0-0 runs Talos 1.13.11 since 2026-10-21; a 1.12 client refuses the 1.35→1.36 upgrade-k8s path and may mis-render patches.
+talosctl = "1.13.11"
