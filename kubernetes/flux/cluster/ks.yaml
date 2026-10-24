@@ -132,19 +132,6 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: longhorn
-    # suspended: this profile declares its LAN addresses in cluster.yaml, so there is nothing to discover
-    - patch: |-
-        apiVersion: kustomize.toolkit.fluxcd.io/v1
-        kind: Kustomization
-        metadata:
-          name: lan-address-probe
-          namespace: flux-system
-        spec:
-          suspend: true
-      target:
-        group: kustomize.toolkit.fluxcd.io
-        kind: Kustomization
-        name: lan-address-probe
     # suspended: single-node cluster: a peer-to-peer image mirror has no peers
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -172,6 +159,20 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: longhorn-backup
+    # disabled (empty path, so anything previously applied is pruned): this profile declares its LAN addresses in cluster.yaml: an empty path so Flux prunes the probe and the pools it owns, rather than a suspend that would leave the pod recreating them
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: lan-address-probe
+          namespace: flux-system
+        spec:
+          suspend: false
+          path: ./kubernetes/apps/base/network/lan-address/disabled
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: lan-address-probe
     # enabled: the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -271,6 +272,24 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
+# ── GitRepository — the optional apps (private; per-cluster deploy key) ──────
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: jg-extras
+  namespace: flux-system
+spec:
+  interval: 1h
+  # Quoted for the reason the jg-base GitRepository gives.
+  url: "ssh://git@github.com/ferry133/jg-extras.git"
+  ref:
+    branch: "main"
+  # Rendered by components/sops/jg-extras-deploy-key.sops.yaml.j2 from this
+  # directory's jg-extras.deploy.key; keys identity / known_hosts, the same
+  # shape as the root sync's github-deploy-key.
+  secretRef:
+    name: jg-extras-deploy-key
+---
 # ── extras/ingress-nginx/ingress-nginx ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
@@ -286,7 +305,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -310,7 +329,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -334,7 +353,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -358,7 +377,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -382,7 +401,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -406,7 +425,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -430,7 +449,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:

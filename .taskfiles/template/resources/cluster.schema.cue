@@ -353,6 +353,39 @@ import (
 			cluster_dns_gateway_addr: net.IPv4 & !=cluster_api_addr
 			cloudflare_gateway_addr:  net.IPv4 & !=cluster_api_addr
 		}
+		// Why these three must differ, and what would have to change to relax
+		// it — jgct#188 (2), asked by the person who hit it while turning a
+		// one-box appliance into two nodes.
+		//
+		// **They are not "one address per service".** `envoy-internal`,
+		// `k8s-gateway` and `mqtt` already share ONE address through Cilium's
+		// `lbipam.cilium.io/sharing-key` — their ports do not overlap, and
+		// `lan_shared_addr` is `Opt-in` on every profile, not just appliance.
+		// `check-lb-pool-render.py` has carried a `deployment_profile: "full"`
+		// case for exactly that since before this comment existed. So the
+		// sharing mechanism is not something `full` lacks.
+		//
+		// What `full` cannot share is `envoy-external`: it listens on the same
+		// 80/443 as `envoy-internal`, so Cilium refuses to put them on one
+		// address (jg-base's lan-address/README states the rule; the ports are
+		// the reason, and they are a property of the workloads).
+		//
+		// **So the honest status of these three `!=` clauses is: nobody has
+		// measured whether collapsing the two internal ones is accepted, and
+		// until someone does, distinct is what the schema can defend.** That
+		// is a weaker claim than "forbidden", and writing the weaker one is the
+		// point — the next person to ask deserves the reason rather than the
+		// silence this block used to offer.
+		//
+		// ⚠️ One measurement landed while this was being written and it makes
+		// the relaxation harder, not easier (`[5fe39a]`, jg-jiahd, Cilium
+		// v1.19.1, 2026-09-24): an address L2-announced by ANOTHER node reads
+		// **TAKEN** to `arping -D`, the same probe `lan-address-probe` uses.
+		// Controls were complete — router TAKEN, two sibling nodes TAKEN (so
+		// the instrument sees across nodes), the observer's own address FREE,
+		// unused addresses FREE. Anything that hands these addresses to
+		// discovery has to survive that, and jgct#190 is where that is being
+		// worked out.
 		cluster_gateway_addr:     net.IPv4 & !=cluster_dns_gateway_addr & !=cloudflare_gateway_addr
 		cluster_dns_gateway_addr: net.IPv4 & !=cluster_gateway_addr & !=cloudflare_gateway_addr
 		cloudflare_gateway_addr:  net.IPv4 & !=cluster_gateway_addr & !=cluster_dns_gateway_addr
@@ -417,6 +450,15 @@ import (
 	// produces a GitRepository that reconciles something other than what the
 	// operator named — which reads exactly like it worked.
 	base_repo_ref_kind: *"branch" | "tag" | "semver" | "commit"
+	// Where the OPTIONAL apps (`extras`) come from, since they moved out of
+	// jg-base into their own repo (fleet-ops root `split-extras-repo`, D1/D4/D6;
+	// jgct#217). Same shape and defaulting as base_repo_*, pinned separately so
+	// an extras release never moves the base. The default is SSH: jg-extras is
+	// private (ferry133, 2026-10-18), so Flux authenticates with a per-cluster
+	// read-only deploy key (`jg-extras.deploy.key` in this directory).
+	extras_repo_url: *"ssh://git@github.com/ferry133/jg-extras.git" | string & !=""
+	extras_repo_ref: *"main" | string & !=""
+	extras_repo_ref_kind: *"branch" | "tag" | "semver" | "commit"
 	cloudflare_domain: net.FQDN
 	cloudflare_token: string
 	// How cloudflared reaches Cloudflare's edge.
@@ -610,6 +652,16 @@ import (
 	// constraint here cannot print anything sensitive. plugin.py refuses a key
 	// without a date, and a date without a key.
 	talos_mcp_sa_key_expires?: =~"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+	// The same sidecar's OPTIONAL second credential (jg-base
+	// im-onsite-operator-tools): a direct-LAN talosconfig with role ceiling
+	// os:operator, minted ONCE per cluster by fleet-ops's
+	// `talos-operator-credential mint` (an Omni break-glass) and written here
+	// file-to-file -- never typed by hand. Unlike talos_mcp_config it carries
+	// its own client cert AND key, so it IS a credential. No constraint beyond
+	// non-empty: cue vet echoes the value it rejects, and this value holds a
+	// private key. No *_expires twin: the expiry is in the certificate, and
+	// both the sidecar and the skill's `verify` read it from there.
+	talos_operator_config?: string & !=""
 	// factory provisioning credentials (extras/factory/factory in jg-base).
 	// Only the cluster that hosts factory sets these -- jcom today. Every one is
 	// optional and renders empty elsewhere, which is what the consuming Secret
@@ -727,6 +779,113 @@ import (
 	daily_check_notify_email_to?:       string
 	daily_check_healthchecks_ping_url?: string
 	daily_check_endpoints?:             string
+
+	// Standalone app repos (fleet-ops root `standalone-app-repos`, design
+	// D1-D9; jgct#214 task 3.1). Each entry is one tenant: a private repo that
+	// Flux reconciles into its own namespaces through its own ServiceAccount.
+	// Defaulted rather than optional for the same reason as `extras`: the
+	// checks below read it unconditionally. The default does not reach
+	// makejinja (plugin.py reads cluster.yaml, not CUE's value), so absent and
+	// `[]` must, and do, render the same — check-tenant-render.py asserts it.
+	app_repos: *[] | [...#AppRepo]
+
+	_app_repos_check: {
+		name: list.UniqueItems() & [for r in app_repos {r.name}]
+		// Two tenants in one namespace would share a RoleBinding target, so
+		// either could act as the other. Across ALL entries, not per entry.
+		namespaces: list.UniqueItems() & [for r in app_repos for n in r.namespaces {n}]
+		// The agent's write key reaches `im` as ONE Secret
+		// (`claudecode/im-apps-write-key`) and ONE `IM_APPS_REPO` value
+		// (jg-base#183), so a second agent entry has nowhere to go: it would
+		// render a second Secret of the same name and one of the two keys
+		// would silently win.
+		agents: list.MaxItems(1) & [for r in app_repos if r.kind == "agent" {r.name}]
+	}
+
+	// A tenant is bound to `tenant-admin` in every namespace it declares, and
+	// `tenant-admin` can read Secrets. So a tenant that declared `claudecode`
+	// could read im's write key, `flux-system` every tenant's age key, and so
+	// on. These are the namespaces the platform itself creates or deploys into,
+	// enumerated from what is protected rather than from memory (2026-10-18:
+	// every `kind: Namespace` name and every `namespace:`/`targetNamespace:`
+	// value in jg-base main `6600713` and jgct main `791ec14`, plus the three
+	// Kubernetes creates on its own). A namespace added to jg-base later is NOT
+	// covered until it is added here.
+	#ReservedNamespaces: [
+		"cert-manager", "claudecode", "db", "default", "factory",
+		"flux-system", "freepbx", "ingress-nginx", "kube-node-lease",
+		"kube-public", "kube-system", "lan-address", "linebot",
+		"longhorn-system", "monitoring", "mqtt", "network", "observability",
+		"omni", "storage",
+	]
+
+	// RFC 1123 label: the name becomes a Namespace (default `[name]`) and the
+	// suffix of `tenant-<name>` objects.
+	#DNSLabel: =~"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+	// The rejection names the namespace it refused (`out of bound
+	// !="claudecode"`); namespace names are not credentials, so the echo
+	// that keeps credential fields free of format constraints is harmless here.
+	#TenantNamespace: #DNSLabel & and([for r in #ReservedNamespaces {!=r}])
+
+	#AppRepo: {
+		// Also a namespace name when `namespaces` is left out, so it is held
+		// to the same reservation.
+		name: #TenantNamespace
+		// `owner/repo`, the same form as `repository_name`. Tenant repos are
+		// company-held and private (spec: handover); visibility is not a field
+		// because there is no second answer.
+		repository: =~"^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$"
+		//   agent   written by the cluster's own im (write deploy key, D5)
+		//   vendor  written by a third party added as a collaborator
+		kind: "agent" | "vendor"
+		// The agent's name is fixed, not chosen: im's own instructions (k8scc
+		// im-policy.md) reconcile `kustomization tenant-im-apps`, so an agent
+		// by any other name renders fine and leaves im pointing at a
+		// Kustomization that does not exist (root task 3.11).
+		if kind == "agent" {
+			name: "im-apps"
+		}
+		namespaces: *[name] | [...#TenantNamespace] & list.MinItems(1)
+		branch?: string & !=""
+		// Defaults (4 / 8Gi / 50, design D4) are applied in plugin.py — a CUE
+		// default would never reach the template. Strings, because they go into
+		// a ResourceQuota verbatim and `4` vs `"4"` changes nothing there while
+		// an unquoted `8Gi` is a YAML string anyway.
+		quota?: {
+			cpu?:    string & !=""
+			memory?: string & !=""
+			pods?:   int & >0
+		}
+		// Every privilege is a grant from cluster.yaml; there is deliberately
+		// no `pod_security` field. The PSA level is derived (D9):
+		// host_network -> privileged, else baseline -> baseline, else
+		// restricted. A level that could be written here is a level that could
+		// disagree with the grants.
+		grants?: #Grants
+		// The tenant's own LoadBalancer pool, as one Cilium block. Required
+		// when `grants.lan_ip` is above zero. Must lie outside `lb_pool_blocks`;
+		// that is checked in plugin.py, because lb_pool_blocks is derived
+		// there (overlapping pools report PoolConflict and the narrower one
+		// silently never allocates — 2026-08-12).
+		lan_ip_range?: {
+			start: net.IPv4
+			stop:  net.IPv4
+		}
+		if grants != _|_ if grants.lan_ip != _|_ if grants.lan_ip > 0 {
+			lan_ip_range!: _
+		}
+	}
+
+	// All off by default. `l2` and `devices` are accepted here and refused in
+	// plugin.py until their platform component ships, so the refusal can name
+	// the component instead of reading as a typo.
+	#Grants: {
+		baseline?:     bool
+		host_network?: bool
+		lan_ip?:       int & >=0
+		l2?:           bool
+		devices?:      [...string]
+	}
 }
 
 #Config

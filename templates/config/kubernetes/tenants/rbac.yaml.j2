@@ -1,0 +1,25 @@
+#% if app_repos %#
+#| One RoleBinding per declared namespace, and nothing else. `tenant-admin` is
+   the fleet ClusterRole jg-base ships (no Flux API groups, no cilium.io, no
+   cluster-scoped resource, no escalate/bind/impersonate, no `*`); binding it
+   with a RoleBinding confines it to that namespace. No ClusterRoleBinding may
+   ever name a tenant ServiceAccount — check-tenant-render.py asserts it. #|
+#% for repo in app_repos %#
+#% for ns in repo.namespaces %#
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tenant-#{ repo.name }#
+  namespace: #{ ns }#
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tenant-admin
+subjects:
+  - kind: ServiceAccount
+    name: tenant-#{ repo.name }#
+    namespace: flux-system
+#% endfor %#
+#% endfor %#
+#% endif %#

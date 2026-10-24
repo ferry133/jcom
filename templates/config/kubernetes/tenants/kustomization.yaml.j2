@@ -1,0 +1,23 @@
+#% if app_repos %#
+---
+# Applied by Kustomization cluster-tenants (ks.yaml), with the cluster key and
+# kustomize-controller's own identity: these are the platform-owned objects that
+# bound each tenant (jgct#214 task 3.4, fleet-ops root `standalone-app-repos`
+# D1-D5, D9). The tenant's own Kustomization runs as `tenant-<name>` and can
+# change none of them.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespaces.yaml
+  - rbac.yaml
+  - quota.yaml
+  - networkpolicy.yaml
+#% if app_repos | selectattr('grants.lan_ip') | list %#
+  - lb-pools.yaml
+#% endif %#
+  - tenant-git-auth.sops.yaml
+  - tenant-sops-age.sops.yaml
+#% if app_repos | selectattr('kind', 'equalto', 'agent') | list %#
+  - im-apps-write-key.sops.yaml
+#% endif %#
+#% endif %#

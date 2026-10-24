@@ -1,0 +1,21 @@
+#% if app_repos | selectattr('kind', 'equalto', 'agent') | list %#
+#| The jg-base#183 contract: Secret `im-apps-write-key` in `claudecode`, data key
+   `identity`. jg-base mounts the whole Secret at /etc/im-apps (optional, 0400)
+   and sets IM_APPS_KEY=/etc/im-apps/identity; IM_APPS_REPO comes from
+   cluster-secrets. The schema allows at most one agent, so there is one Secret.
+   An im that was already running when this first appears does not see it (70 s
+   measured on jg-jcc2): provisioning restarts im after the first apply. #|
+#% for repo in app_repos if repo.kind == 'agent' %#
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: im-apps-write-key
+  namespace: claudecode
+stringData:
+  identity: |
+    #% filter indent(width=4, first=False) %#
+    #{ tenant_key(repo.name, 'write') }#
+    #% endfilter %#
+#% endfor %#
+#% endif %#

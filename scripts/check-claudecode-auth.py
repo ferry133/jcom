@@ -186,18 +186,35 @@ def check_auth0(config: Path) -> list[str]:
 
 
 
-def callback_urls(config: Path) -> list[str]:
-    """The Auth0 registrations a render cannot perform on the operator's behalf.
+def callback_urls(config: Path) -> list[tuple[str, str]]:
+    """(application, host) the operator must register — a render cannot.
 
     Rendering succeeds without them and the terminal still fails to open, with
     an Auth0 error page rather than anything pointing back here — so print them
     every time instead of waiting for someone to hit it.
+
+    TWO applications since jgct#84, and putting a host in the wrong one is not
+    a typo but a hole: the FACTORY app gates `im` on every cluster, so a
+    customer host registered there would accept the factory's tenant. Which is
+    also why ferry133 ruled out a wildcard (2026-09-07): `https://*.<domain>`
+    in the factory app would let ANY subdomain of a customer's domain use the
+    factory application as its callback, while only `im.` is meant to.
+
+    The base im is always here, even when claude_instances is empty. It used to
+    be derived from that list with a `// ["im"]` default, and since jgct#81 made
+    im a base app the live clusters all declare `[]` — so this printed NOTHING
+    for jcom and jg-jiahd (measured 2026-09-07), silently dropping the one
+    registration whose absence shows up as a login failure nobody can attribute.
     """
     domain = yq('.cloudflare_domain // ""', config)
-    instances = yq('.claude_instances // ["im"] | .[]', config).split()
     if not domain:
         return []
-    return [f"https://{i}.{domain}/oauth2/callback" for i in instances]
+    # jg-base hardwires the base im at im.${SECRET_DOMAIN}; not derived from
+    # claude_instances, which since jgct#81 holds the EXTRA instances only.
+    out = [("factory", f"im.{domain}")]
+    out += [("customer", f"{i}.{domain}") for i in instances(config)]
+    return out
+
 
 
 def credential_problems(credential: str) -> list[str]:
@@ -349,8 +366,14 @@ def main() -> int:
 
     print(f"ok    {label}")
     if auth0:
-        for url in callback_urls(config):
-            print(f"        Auth0 app must allow callback: {url}")
+        for app, host in callback_urls(config):
+            which = ("FACTORY Auth0 app (auth0.json — gates the base im)"
+                     if app == "factory"
+                     else "CUSTOMER Auth0 app (claudecode_auth0_* in cluster.yaml)")
+            print(f"        {which}, register exactly (no wildcard):")
+            print(f"          Callback URL:  https://{host}/oauth2/callback")
+            print(f"          Logout URL:    https://{host}")
+            print(f"          Web Origin:    https://{host}")
     return 0
 
 

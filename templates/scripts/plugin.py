@@ -168,6 +168,63 @@ def github_deploy_key(file_path: str = 'github-deploy.key') -> str:
         raise RuntimeError(f"Unexpected error while reading {file_path}: {e}")
 
 
+# A tenant's key material, from the git-ignored `tenants/` directory the
+# provisioning skill writes (jgct#214 task 3.4; `.gitignore` `/tenants*/`,
+# task 3.5). The file names ARE the contract with that skill:
+#   tenants/<name>.age.key     the tenant's age identity (design D2)
+#   tenants/<name>.deploy.key  read-only deploy key Flux pulls with
+#   tenants/<name>.write.key   kind: agent only — im's write deploy key (D5)
+# The shape check catches the likeliest mistake, a public half under the
+# private name, without ever putting the content into the message.
+TENANT_KEY_FILES = {
+    'age': ('{}.age.key', 'AGE-SECRET-KEY-'),
+    'deploy': ('{}.deploy.key', 'PRIVATE KEY-----'),
+    'write': ('{}.write.key', 'PRIVATE KEY-----'),
+}
+
+
+def tenant_key(name: str, kind: str, directory: str = 'tenants') -> str:
+    pattern, marker = TENANT_KEY_FILES[kind]
+    path = Path(directory) / pattern.format(name)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} not found: app_repos[{name}] needs its {kind} key there. "
+            f"The tenant provisioning skill (fleet-ops) writes it; this "
+            f"directory is git-ignored and travels in the escrow bundle.")
+    text = path.read_text().strip()
+    if marker not in text:
+        raise ValueError(
+            f"{path} does not look like a private {kind} key (no "
+            f"{marker!r} line) — a public half under the private name?")
+    return text
+
+
+# Apps that graduated from extras to base. Dates and reasons are in the
+# comment above the extras loop in ks.yaml.j2.
+EXTRAS_NOW_BASE = ['claudecode/claude-code', 'monitoring/daily-check',
+                   'storage/local-path-provisioner', 'default/echo']
+
+
+# This cluster's read-only deploy key for jg-extras (jgct#217), git-ignored in
+# the cluster repo directory and carried by the escrow bundle like the others.
+# Refuses a missing file or a public half under the private name, and never
+# puts the content in a message.
+def extras_deploy_key(file_path: str = 'jg-extras.deploy.key') -> str:
+    path = Path(file_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{file_path} not found: this cluster lists extras, which come from "
+            f"the private repo ferry133/jg-extras. Generate a read-only deploy "
+            f"key here (ssh-keygen -t ed25519 -N '' -f {file_path}), register "
+            f"{file_path}.pub on ferry133/jg-extras, then re-run.")
+    text = path.read_text().strip()
+    if 'PRIVATE KEY-----' not in text:
+        raise ValueError(
+            f"{file_path} does not look like a private SSH key (no "
+            f"'PRIVATE KEY-----' line) — a public half under the private name?")
+    return text
+
+
 # Return the Flux / GitHub push token from github-push-token.txt
 def github_push_token(file_path: str = 'github-push-token.txt') -> str:
     try:
@@ -284,6 +341,120 @@ def talos_patches(value: str) -> list[str]:
 # renders EXTRA instances only, and "im" in claude_instances is refused below
 # -- it would fight the base HelmRelease over the same object name.
 DEFAULT_CLAUDE_INSTANCES = []
+
+
+# Defaults for one `app_repos` entry's ResourceQuota (fleet-ops root
+# `standalone-app-repos`, design D4). Strings: they are written into the
+# ResourceQuota verbatim.
+APP_REPO_QUOTA_DEFAULTS = {'cpu': '4', 'memory': '8Gi', 'pods': 50}
+
+# Grants the schema accepts but no platform component serves yet. Refused here
+# rather than in cluster.schema.cue so the refusal can say what is missing; a
+# schema rejection would read as a typo.
+APP_REPO_UNSERVED_GRANTS = {
+    'l2': "an L2 discovery component (mDNS reflector or Multus+macvlan) — "
+          "ferry133/jg-base#187 (fleet-ops root `standalone-app-repos` task 8.1)",
+    'devices': "a device plugin exposing /dev/* as extended resources — "
+               "ferry133/jg-base#188 (fleet-ops root `standalone-app-repos` task 8.2)",
+}
+
+
+def _block_range(block: dict[str, str]) -> tuple[Any, Any]:
+    """First and last address of one Cilium pool block ({cidr} or {start, stop})."""
+    if 'cidr' in block:
+        net = ipaddress.ip_network(block['cidr'], strict=False)
+        return net[0], net[-1]
+    return ipaddress.ip_address(block['start']), ipaddress.ip_address(block['stop'])
+
+
+def _fmt_block(block: dict[str, str]) -> str:
+    return block['cidr'] if 'cidr' in block else f"{block['start']}-{block['stop']}"
+
+
+def app_repos(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fill each `app_repos` entry's defaults, derive its PSA level, and refuse
+    the declarations that would render a broken or unsafe tenant.
+
+    Mutates the entries in place and returns the list. Reads `lb_pool_blocks`,
+    so it must run after that is set.
+    """
+    repos = data.get('app_repos') or []
+    pool = [_block_range(b) for b in json.loads(data['lb_pool_blocks'])]
+    pool_text = ', '.join(_fmt_block(b) for b in json.loads(data['lb_pool_blocks']))
+    claimed: list[tuple[Any, Any, str]] = []
+    for repo in repos:
+        name = repo['name']
+        repo.setdefault('branch', 'main')
+        repo.setdefault('namespaces', [name])
+        quota = repo.setdefault('quota', {})
+        for key, value in APP_REPO_QUOTA_DEFAULTS.items():
+            quota.setdefault(key, value)
+        grants = repo.setdefault('grants', {})
+        grants.setdefault('lan_ip', 0)
+
+        for grant, component in APP_REPO_UNSERVED_GRANTS.items():
+            if grants.get(grant):
+                raise KeyError(
+                    f"app_repos[{name}].grants.{grant} is set, but the platform "
+                    f"does not ship {component} yet. Remove the grant; a tenant "
+                    f"that relied on it would deploy and then not work.")
+
+        # The level is a consequence of the grants, never an input (design
+        # D9): the schema has no field for it, so nothing in cluster.yaml can
+        # disagree with what is rendered here.
+        if grants.get('host_network'):
+            repo['psa_level'] = 'privileged'
+        elif grants.get('baseline'):
+            repo['psa_level'] = 'baseline'
+        else:
+            repo['psa_level'] = 'restricted'
+
+        if not grants['lan_ip']:
+            continue
+        # An appliance's shared pool is discovered at runtime by
+        # lan-address-probe (lb_pool_blocks is empty there, see above), so
+        # there is nothing to prove this range disjoint from — and an overlap
+        # is the failure that reports nothing.
+        if data.get('deployment_profile') == 'appliance':
+            raise KeyError(
+                f"app_repos[{name}].grants.lan_ip is {grants['lan_ip']} on an "
+                f"appliance. Its LoadBalancer pool is discovered at runtime, so "
+                f"render time cannot prove lan_ip_range disjoint from it, and an "
+                f"overlapping pool fails silently (PoolConflict). Not supported "
+                f"on appliances.")
+        rng = repo['lan_ip_range']
+        start = ipaddress.ip_address(rng['start'])
+        stop = ipaddress.ip_address(rng['stop'])
+        if stop < start:
+            raise KeyError(
+                f"app_repos[{name}].lan_ip_range {start}-{stop}: stop is below start.")
+        size = int(stop) - int(start) + 1
+        if size < grants['lan_ip']:
+            raise KeyError(
+                f"app_repos[{name}].lan_ip_range {start}-{stop} holds {size} "
+                f"address(es) but grants.lan_ip is {grants['lan_ip']}; the quota "
+                f"would allow Services the pool can never address.")
+        # Disjoint from the shared pool. Cilium reports an overlap as
+        # PoolConflict and the narrower pool never allocates, with no other
+        # symptom — 2026-08-12 (jg-base networks.yaml) and jgct#10.
+        for lo, hi in pool:
+            if start <= hi and lo <= stop:
+                raise KeyError(
+                    f"app_repos[{name}].lan_ip_range {start}-{stop} overlaps "
+                    f"lb_pool_blocks ({pool_text}). Overlapping Cilium pools "
+                    f"report PoolConflict and the narrower one never allocates. "
+                    f"Choose addresses outside the shared pool; a cluster still "
+                    f"on the whole node_cidr pool must first declare its "
+                    f"LoadBalancer addresses so the pool narrows.")
+        # And from every other tenant's pool, for the same reason.
+        for lo, hi, other in claimed:
+            if start <= hi and lo <= stop:
+                raise KeyError(
+                    f"app_repos[{name}].lan_ip_range {start}-{stop} overlaps "
+                    f"app_repos[{other}].lan_ip_range {lo}-{hi}.")
+        claimed.append((start, stop, name))
+    return repos
+
 
 class Plugin(makejinja.plugin.Plugin):
     def __init__(self, data: dict[str, Any]):
@@ -466,6 +637,21 @@ class Plugin(makejinja.plugin.Plugin):
         data.setdefault('base_repo_url', 'https://github.com/ferry133/jg-base')
         data.setdefault('base_repo_ref', 'main')
         data.setdefault('base_repo_ref_kind', 'branch')
+        # Where the optional apps come from (jgct#217, fleet-ops root
+        # `split-extras-repo`). Defaulted here for the same reason as the three
+        # lines above. SSH, because jg-extras is private.
+        data.setdefault('extras_repo_url', 'ssh://git@github.com/ferry133/jg-extras.git')
+        data.setdefault('extras_repo_ref', 'main')
+        data.setdefault('extras_repo_ref_kind', 'branch')
+        # The extras that actually render a Kustomization: `extras` minus the
+        # apps that graduated to base (a cluster.yaml still listing one must not
+        # point at a path jg-extras does not have). One list, read by BOTH
+        # ks.yaml.j2 (the loop and GitRepository jg-extras) and the deploy-key
+        # Secret template: two copies of this filter would drift, and a Secret
+        # rendered without its GitRepository, or the reverse, is the jgct#56
+        # shape (a credential nothing references / `unable to list remote`).
+        data['extras_from_repo'] = [
+            e for e in (data.get('extras') or []) if e not in EXTRAS_NOW_BASE]
         # The same repo as a directory next to this one, for bootstrap's helmfile
         # — it reads HelmRelease values off disk before the cluster can fetch
         # anything. Derived from the URL rather than declared: two fields for one
@@ -944,6 +1130,11 @@ class Plugin(makejinja.plugin.Plugin):
             blocks = [{'cidr': str(data.get('node_cidr'))}]
         data.setdefault('lb_pool_blocks',
                         json.dumps(blocks, separators=(',', ':')))
+        # Tenant entries (jgct#214 task 3.2). Defaulted HERE, for the reason the
+        # base_repo_* lines give: CUE's `*default` never reaches this file. After
+        # lb_pool_blocks because the LAN-IP checks read it. Absent and `[]` stay
+        # indistinguishable to the templates, which check-tenant-render.py asserts.
+        data['app_repos'] = app_repos(data)
         # Whether local-path should claim the cluster-default StorageClass.
         # nfs-subdir claims it whenever it is running, and it only runs on an
         # NFS cluster, so the two never collide.
@@ -1019,4 +1210,6 @@ class Plugin(makejinja.plugin.Plugin):
             github_deploy_key,
             github_push_token,
             talos_patches,
+            tenant_key,
+            extras_deploy_key,
         ]

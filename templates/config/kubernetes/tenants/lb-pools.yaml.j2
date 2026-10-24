@@ -1,0 +1,37 @@
+#% if app_repos | selectattr('grants.lan_ip') | list %#
+#| A tenant's own LoadBalancer pool (D9). plugin.py has already refused a range
+   that overlaps lb_pool_blocks or another tenant's, because overlapping pools
+   report PoolConflict and the narrower one never allocates. The selector is a
+   SERVICE label plus the Service's namespace (Cilium matches Service labels and
+   the synthesised namespace label, not namespace labels — measured on jg-jcc2,
+   root 3b.1); jg-base's shared pool selects `jg.tenant DoesNotExist`. #|
+#% for repo in app_repos if repo.grants.lan_ip %#
+---
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: tenant-#{ repo.name }#
+  labels:
+    jg.tenant: #{ repo.name }#
+spec:
+  blocks:
+    - start: "#{ repo.lan_ip_range.start }#"
+      stop: "#{ repo.lan_ip_range.stop }#"
+  serviceSelector:
+    # Both halves, ANDed. The label alone is tenant-writable: until jg-base's
+    # admission policy exists, tenant A could label a Service `jg.tenant: <B>`
+    # and draw from B's pool. The namespace is the synthesised
+    # io.kubernetes.service.namespace, which a tenant cannot set (it matches in
+    # serviceSelector — root spike 3b.1 on jg-jcc2). The label half stays
+    # because the shared pool's `jg.tenant DoesNotExist` exclusion relies on it.
+    matchLabels:
+      jg.tenant: #{ repo.name }#
+    matchExpressions:
+      - key: io.kubernetes.service.namespace
+        operator: In
+        values:
+#% for ns in repo.namespaces %#
+          - #{ ns }#
+#% endfor %#
+#% endfor %#
+#% endif %#

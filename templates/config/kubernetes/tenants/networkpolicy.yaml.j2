@@ -1,0 +1,34 @@
+#% if app_repos %#
+#| Ingress into a tenant namespace only from the tenant's own namespaces, the
+   gateway namespace (`network`: envoy-external/-internal reach HTTPRoute
+   backends from there) and the node itself (kubelet probes); plus the LAN
+   (`world`) for a tenant with a lan_ip grant, whose LoadBalancer Services are
+   the point of the grant. Egress is deliberately not restricted (spec: "Egress
+   SHALL NOT be restricted"). A host_network pod is outside all of this. #|
+#% for repo in app_repos %#
+#% for ns in repo.namespaces %#
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: tenant-ingress
+  namespace: #{ ns }#
+spec:
+  endpointSelector: {}
+  ingress:
+    - fromEndpoints:
+        - matchExpressions:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: In
+              values:
+#% for allowed in repo.namespaces + ['network'] %#
+                - #{ allowed }#
+#% endfor %#
+    - fromEntities:
+        - host
+#% if repo.grants.lan_ip %#
+        - world
+#% endif %#
+#% endfor %#
+#% endfor %#
+#% endif %#

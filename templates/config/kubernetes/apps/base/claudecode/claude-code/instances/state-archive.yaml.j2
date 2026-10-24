@@ -1,0 +1,136 @@
+#| Off-site archive of each EXTRA instance's claims (jg-cluster-template#202),
+   the per-instance twin of jg-base's base-`im` CronJob
+   (kubernetes/apps/base/claudecode/claude-code/im/enabled/state-archive.yaml).
+
+   Why it is rendered here and not shipped from jg-base: a pod spec must NAME
+   the claims it mounts, and an extra's claims are `<instance>-claude-config`
+   / `<instance>-claude-workspace` -- names that exist only in this cluster's
+   `claude_instances`.
+
+   What is NOT here, on purpose: the script, the credentials, the identity.
+   This CronJob runs jg-base's ConfigMap `claudecode-archive-script`, reads its
+   Secret `claudecode-archive-config` and runs as its SA `claudecode-archive`
+   (all in jg-base `claude-code/app/`, applied on every cluster since
+   ferry133/jg-base#178). One copy of the session cap and the exclusion list,
+   still under the jg-base guards that execute them; one copy of the BACKUP_*
+   values. Re-typing either here would put a second copy outside every guard.
+   ARCHIVE_INSTANCE / ARCHIVE_MEMBERS are that script's only per-caller knobs.
+
+   An `im/disabled` cluster (claudecode_auth0: false) is the one this matters
+   most for: its only terminal is an extra, and `kubectl exec` (monitoring's
+   offsite-backup) cannot reach an extra at 0 replicas -- which is how extras
+   sit by default.
+
+   The YAML comment below is outside the loop on purpose (jgct#229): with no
+   instances the loop renders nothing, makejinja does not write an empty
+   render, and kustomization.yaml would list a file that does not exist.
+   kustomize accepts a comment-only resource file. #|
+# Archive CronJobs for the extra instances in claude_instances; none if it is empty.
+#% for instance in claude_instances %#
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: #{instance}#-state-backup
+  namespace: claudecode
+  labels:
+    # jg-base's daily-check selects backup jobs by this label OR a `-backup`
+    # name; carry both, as the base CronJob does (jg-base#85).
+    app.kubernetes.io/component: backup
+spec:
+  # Half an hour after the base im archive (0 19), itself an hour after
+  # offsite-backup (0 18): no two uploads share a window on a slow link.
+  schedule: "30 19 * * *"
+  timeZone: "Etc/UTC"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      # Coupled to failedJobsHistoryLimit: retaining 3 daily runs needs 3 days
+      # (jg-base#143 -- the stricter knob wins silently).
+      ttlSecondsAfterFinished: 259200
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: claudecode-archive
+          securityContext:
+            # The claims are written by the instance as uid 0 (the NAS/NFS
+            # convention), so they are read as uid 0.
+            runAsNonRoot: false
+            seccompProfile:
+              type: RuntimeDefault
+          # ⚠️ PREFERRED, not required -- copied with its reason from the base
+          # CronJob. RWO is a NODE-scoped lock, so co-locating with a running
+          # instance avoids a multi-attach stall. But `required` matches
+          # EXISTING pods, and an extra at 0 replicas (the default, and the
+          # case this Job exists for) has none: the archive would sit Pending
+          # forever, reading exactly like an archive with nothing to do. With
+          # the instance at 0 the volume is attached nowhere and any node can
+          # take it. What preferred does NOT guarantee on a multi-node cluster
+          # with the instance RUNNING is co-location; that case is unmeasured
+          # here as it is for the base im.
+          affinity:
+            podAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: #{instance}#
+                    topologyKey: kubernetes.io/hostname
+          containers:
+            - name: archive
+              # ⚠️ The same pre-baked ops image as jg-base's base archive, pinned
+              # by hand in TWO repos: jg-base bumps its own copy, nothing bumps
+              # this one. A stale pin still runs (the script is in the ConfigMap,
+              # not the image); it only needs age, aws-cli, tar and gzip.
+              image: ghcr.io/ferry133/claude-code:ops-b8fe918@sha256:c1130a0ff0ca5d344c5bc34831e63bf83cb09755365d343d0922404fd5aa69be
+              command:
+                - /bin/bash
+                - /scripts/archive.sh
+              env:
+                - name: ARCHIVE_INSTANCE
+                  value: "#{instance}#"
+                #| Follows the SAME condition that adds the workspace claim to the
+                   HelmRelease (helmrelease.yaml.j2): naming a member the Job
+                   does not mount is FATAL in archive.sh, and mounting a claim
+                   the release did not create leaves the pod Pending forever. #|
+                - name: ARCHIVE_MEMBERS
+                  value: "#{ 'config workspace' if claudecode_workspace else 'config' }#"
+              envFrom:
+                - secretRef:
+                    name: claudecode-archive-config
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                # Read-only: this Job copies state out; a bug that wrote into
+                # the live claim would be a bug in the thing meant to protect it.
+                - name: claude-config
+                  mountPath: /state/config
+                  readOnly: true
+#% if claudecode_workspace %#
+                - name: claude-workspace
+                  mountPath: /state/workspace
+                  readOnly: true
+#% endif %#
+          volumes:
+            - name: scripts
+              configMap:
+                name: claudecode-archive-script
+                defaultMode: 0555
+            # app-template names a claim `<release>-<persistence key>`.
+            - name: claude-config
+              persistentVolumeClaim:
+                claimName: #{instance}#-claude-config
+                readOnly: true
+#% if claudecode_workspace %#
+            - name: claude-workspace
+              persistentVolumeClaim:
+                claimName: #{instance}#-claude-workspace
+                readOnly: true
+#% endif %#
+#% endfor %#

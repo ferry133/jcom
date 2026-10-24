@@ -1,0 +1,19 @@
+#% if app_repos %#
+#| Each tenant's own age identity, for `decryption.secretRef` on Kustomization
+   tenant-<name>. The cluster key is never a recipient of a tenant file and
+   secretRef does not fall back to it (D2, root spike 1.1). Flux reads every
+   data key ending in `.agekey`. #|
+#% for repo in app_repos %#
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tenant-#{ repo.name }#-sops-age
+  namespace: flux-system
+stringData:
+  age.agekey: |
+    #% filter indent(width=4, first=False) %#
+    #{ tenant_key(repo.name, 'age') }#
+    #% endfilter %#
+#% endfor %#
+#% endif %#

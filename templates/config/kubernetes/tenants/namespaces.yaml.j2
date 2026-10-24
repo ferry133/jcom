@@ -1,0 +1,25 @@
+#% if app_repos %#
+#% for repo in app_repos %#
+#% for ns in repo.namespaces %#
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: #{ ns }#
+  labels:
+    # Derived from grants in plugin.py, never declared (design D9). The tenant
+    # cannot change it: tenant-admin has no verbs on Namespace.
+    pod-security.kubernetes.io/enforce: #{ repo.psa_level }#
+    jg.tenant: #{ repo.name }#
+#% if repo.grants.host_network %#
+    # Read by daily-check row 28: privileged by grant, not by drift. A
+    # host_network tenant is NOT isolated (hostNetwork bypasses network policy).
+    jg.tenant-privileged: granted
+#% endif %#
+#% if repo.grants.lan_ip %#
+    # Read by jg-base's tenant LoadBalancer admission policy (design D9 (B)).
+    jg.tenant-lan-ip: granted
+#% endif %#
+#% endfor %#
+#% endfor %#
+#% endif %#

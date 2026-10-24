@@ -32,6 +32,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import html
 import re
@@ -42,6 +43,7 @@ import tempfile
 from pathlib import Path
 
 QR_RE = re.compile(r"^\[QR:\s*(\S+)\s*\]$")
+IMG_RE = re.compile(r"^\[IMG:\s*([^|\]]+?)\s*\|\s*(.+?)\s*\]$")
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "README-zero-IT.md"
@@ -56,9 +58,35 @@ CHROME_CANDIDATES = [
 ]
 
 
-def stamp_of(text: str) -> str:
-    """Short, human-readable, derived from the bytes a reader would compare."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+def image_path(rel: str) -> Path:
+    """Resolve an [IMG:] reference, or abort.
+
+    A missing picture must stop the build for the same reason a missing QR
+    does: a sheet printed with a hole where a figure should be looks like a
+    layout choice, not like an error."""
+    p = ROOT / rel.strip()
+    if p.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+        raise SystemExit(f"{rel}: only .jpg/.jpeg/.png can be embedded")
+    if not p.is_file():
+        raise SystemExit(
+            f"{rel}: image referenced by {SOURCE.name} not found — refusing "
+            "to build a sheet with a hole where a picture should be")
+    return p
+
+
+def source_stamp(md: str) -> str:
+    """Short, human-readable, derived from the bytes a reader would compare —
+    the text AND every picture it references, in order of appearance.
+
+    Text-only would let an image be swapped under an unchanged caption and
+    keep the old stamp: a drift nothing on the page could reveal, which is
+    exactly the failure this stamp exists to catch."""
+    h = hashlib.sha256(md.encode("utf-8"))
+    for line in md.splitlines():
+        if m := IMG_RE.match(line.rstrip()):
+            h.update(b"\0")
+            h.update(image_path(m.group(1)).read_bytes())
+    return h.hexdigest()[:8]
 
 
 # --------------------------------------------------------------------------
@@ -109,6 +137,9 @@ def render_body(md: str) -> str:
         if m := QR_RE.match(line):
             close_list()
             out.append(qr_block(m.group(1)))
+        elif m := IMG_RE.match(line):
+            close_list()
+            out.append(img_block(m.group(1), m.group(2)))
         elif re.fullmatch(r"-{3,}", line):
             close_list()
             out.append('<hr class="rule">')
@@ -131,6 +162,19 @@ def render_body(md: str) -> str:
     close_list()
     close_quote()
     return "\n".join(out)
+
+
+def img_block(rel: str, caption: str) -> str:
+    """Embed the picture as a data URI so the HTML stays one file.
+
+    The caption goes through inline() like any other text — a figure whose
+    caption silently dropped its bold would be the renderer quietly doing
+    what the module docstring promises it never does."""
+    p = image_path(rel)
+    mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+    b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+    return (f'<figure class="img"><img src="data:{mime};base64,{b64}" alt="">'
+            f"<figcaption>{inline(caption)}</figcaption></figure>")
 
 
 def qr_block(url: str) -> str:
@@ -197,6 +241,9 @@ hr.rule { border: 0; border-top: .6pt solid #bbb; margin: 16pt 0; }
 .qr { margin: 14pt 0; page-break-inside: avoid; text-align: center; }
 .qr svg { width: 38mm; height: 38mm; }
 .qr-note { font-size: 10.5pt; line-height: 1.6; color: #333; margin-top: 5pt; }
+.img { margin: 10pt 0 12pt; text-align: center; page-break-inside: avoid; }
+.img img { max-width: 70mm; max-height: 52mm; border: .4pt solid #bbb; }
+.img figcaption { font-size: 10.5pt; line-height: 1.6; color: #333; margin-top: 4pt; }
 h2, h3, blockquote, ul { page-break-inside: avoid; }
 .stamp {
   position: fixed; bottom: 8mm; left: 16mm; right: 16mm;
@@ -226,7 +273,7 @@ def find_chrome() -> str | None:
 
 def build(html_only: bool) -> int:
     md = SOURCE.read_text(encoding="utf-8")
-    stamp = stamp_of(md)
+    stamp = source_stamp(md)
     OUTDIR.mkdir(parents=True, exist_ok=True)
 
     page = PAGE.format(title=SOURCE.stem, css=CSS, body=render_body(md),
@@ -262,7 +309,7 @@ def build(html_only: bool) -> int:
 
 def check() -> int:
     md = SOURCE.read_text(encoding="utf-8")
-    stamp = stamp_of(md)
+    stamp = source_stamp(md)
     built = sorted(OUTDIR.glob(f"{SOURCE.stem}-*.pdf")) if OUTDIR.is_dir() else []
 
     # Three outcomes, never two. "Nothing built" is the one a match/mismatch

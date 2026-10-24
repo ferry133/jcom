@@ -1,0 +1,32 @@
+# This cluster's READ-ONLY deploy key for ferry133/jg-extras (jgct#217, fleet-ops
+# root `split-extras-repo` D6), for GitRepository jg-extras in ks.yaml. Rendered
+# only when the cluster has extras, from jg-extras.deploy.key in the cluster
+# repo directory (git-ignored, carried by escrow). Applied by the
+# cluster-secrets Kustomization, which decrypts with the cluster key — the
+# bootstrap path does not touch extras, so it is not in bootstrap/.
+# known_hosts copied from bootstrap/github-deploy-key.sops.yaml.j2; a GitHub
+# host-key rotation changes both.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jg-extras-deploy-key
+  namespace: flux-system
+stringData:
+  identity: ENC[AES256_GCM,data:v4OrywW63qNrTgzAoD5NB3GrLIyERNnaeHjM6yDv3BU3m4rCJRrTe/Dmqul8MfdLPssiNdDSuFHyKzn9VekxOfHvThvt1tYNwmHkWsM8dEh88fdjXYvnDyG3Kd1L5E5Oj+alVtxynXUh3DDRsPMz5f+fccvZnMFI7BwqHxDRxGRJQ5aVnyDTSPoXaDIlcOUznQdAeUdCVoeok/GtLZxyUeKxhgD07f0BqRGSsqMzQJ9bz9BmGkYVjLFGVqJem+czjyp/HqZ5buMGKhLGjDSkr+7fW3rLCWCoyGbEZK5gBJ90ci4ger3w4bHYCNmebrEg/30WKOdeuR1CKeYz8g7BAaSGVcJ2x27yq9nSmVwH6JBYWB0HI2D2tZATc/Dn2fsoYphlAQFHegXgbS6EEOOPXuZEp2TYQGpjWnUitYTj2eYYCoW6Wd1j/OWSpV+pUZXAQCeRr9vOP9Zw7vZ+8LBM7/wjNjydrXB8kutMpnzJEvKJ0/I4rpg28EWe0P3jtmnqW3ZhyOuZB4la4/PUeUbRi1yfLjEvEjSGHMzdn6njLVkxIzrxPYfh/JvBo2R4881x,iv:xfVRBmv6DrAI+3RWdHh4JIphLV5CSqW6RLz8Y0S7Ty0=,tag:xSm8BxKvMYYeKiC28y39FQ==,type:str]
+  known_hosts: ENC[AES256_GCM,data:8m8wDB8NcUeQYv0MxmqutFtLzat0r8F1FN/5j+6KgI5JPT2Njl7PseFg97XbhQBHnifEG8kyRGoRn21tnEEfdmAll6DiSWPF9GtnsUT34awcdmUkNRAWtnbCC2ujQMB1i+0vyH5PvZAaSAQiD6FWqdWMfPPe+MHU+xc9OTPzgacLZ9WIRLYPVa6IQtw8BOR4uOp4XQzeHqKzJpbuSnKeLi8BJJ7EHbBmqZsoSscixCmCViHAs9cYdc7lg7DjKYo28lTrcS4nkXPw76ydQiXx7nlNrisOufjfE7MTi7fYvFXYedZYTanOvhohDyfb0NrZTw1pgz1Lcl6EJK6Kisuwu+QPwqzoeaKnDLmBuKVXt5KdM3w7oBwXNgbfvKXjglpbww8+qAaLcZRxIOOGzhiHmsIFDvjSrstWwHL8oI1WjxfdabFCwPngovEX18saRsNla5DD61aP7turlp+P1CunyXk90lH1sD6n0MrFgQ9JBf+3dNKS5cO+bd7aZYiRPaDexuutGq9kPOgZ4hKUQvLWOlqjvN0eXFKoVR7WVHW6SpSGyxRPjoN3Odg848n2kmOy2trcavf2WV8hDPIw4kz8IlEip4XuMd62LyI4T/iBX4evTKm8vlC77g32LV7HSYwevDqHZj//tTtBz4QALDufBm3XYv8DD1KPO/4AZ+nTXKP1bon4TrjXbLy6fu4Rl0sudeczo/UrxIT4d76T70pB66yBfkrQ/9jAC+WfCsfDvpx+KjpiCXnQ2EWZ4mee5rcDPoY2he4RYk01qw4owpm9SBS1BevI695SQxXXc3xAKQz6NjQ6luuGSDFjOEll9IWX42a76dTZb/7K2v1YpMhdFcHTN4QvFSnnRmpqvGPGjVAhpYdwrrLU5fe68pIpibX5VxlVSapPviaXtCJllVc0OdOtWOGv7WTlVeSJswqnqb4aotGWHCZrCw2qTs53hAN0ILZPtTFxk2UzEnjupN7UXIS4hzbbwvv1E9yJ6bxPnOxI9Ay5xO5ho/AL2qvWfwLj98sClcer32udipWXduypFYdCPzwfkO2YJ205V0J0DIc2VXsmI3rJjF/+OnVO4VA93A9uFd0iXhaI+x/3,iv:zUAsB1nXx3QG9Zaw53KzQItHTzdf2y5HidK3H7+9TVk=,tag:5I/YzVRDq5g4OwSUoJogFA==,type:str]
+sops:
+  age:
+    - recipient: age1eljkxy6r497jeyanvczq9juqkj48dt38kevlenmdcsp8nud49sdqpfejwt
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSB2QjJYYnZUQnhnVlM0cklo
+        OWZVcENMTm9WVDBMUGp6eWN4T3owcE1OclFZCnhhdi8yaUdNN2JxMHBnWjhOVHZm
+        NS9CbXRaZElmTmFRT0QvRWxoYVBhdmsKLS0tIEhZN09SRXRvS05wWlZ1MyszT1ZX
+        VU1sNGQxTXp5Y0gyK214UERITTJUU1kKsTUbDxo4mDZESu3/cEK/VUtDzegT3Ofs
+        d5/HlbsSR006ZxPYOYh0b2uLJdbgeMhoSVMROcTt8BY+eA5TbxPEzA==
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-10-24T14:54:50Z"
+  mac: ENC[AES256_GCM,data:bD0vSTpNKxvaJlt7U+g9LzT4MlC2F3asSx0DkoRWrjCO7x0xaqEreopnG6OI3tigVc8i23lHdMs9Pz0+k8JUqQ1Y73HNJFTZdLExa5md209QNSgWr7PoaPYCBjWJksV9gmtXxph1q6GraCO1+6YSViZV2AF1i8mBNZY/bt54Q/I=,iv:ywtjsgr3z2h22xrBNq/5msOCEEWxjGhSNCThNjleACQ=,tag:TbQlrLPxcHraO1nEBvHp4A==,type:str]
+  encrypted_regex: ^(data|stringData)$
+  mac_only_encrypted: true
+  version: 3.12.1

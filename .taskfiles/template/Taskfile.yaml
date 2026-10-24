@@ -40,27 +40,78 @@ tasks:
     status:
       - test -f {{.TEMPLATE_NODE_CONFIG_FILE}}
 
+  # ---------------------------------------------------------------- key/token
+  # generation. Three tasks, one shape, and two lessons paid for on real walks.
+  #
+  # **`status:` uses `test -s` (non-empty), not `test -f` (exists).** A generator
+  # that dies part-way still leaves the file: the shell's `>` creates it before
+  # the command runs, and `age-keygen`/`ssh-keygen` can fail after opening their
+  # output. With `-f` the next `task init` says "up to date" and the gap is never
+  # filled again — the first run's damage covered by the second run's success
+  # (#149, measured 2026-09-14 on a real walk: `python` unresolved, 0-byte token,
+  # second run exit 0 with five tasks "up to date").
+  #
+  # **Each task removes its own product first, and only when it is 0 bytes.**
+  # `test -s` made the task *run*, but both generators refuse to overwrite an
+  # existing file: `age-keygen` errors, and `ssh-keygen` asks `Overwrite (y/n)?`
+  # — which **hangs** when stdin is a terminal and answers "no" at EOF. So the
+  # task ran and the file stayed empty (#153 acceptance, #155).
+  #
+  # ⚠️ **0 bytes only.** ferry133 authorised "delete and regenerate *when the
+  # file is 0 bytes*" (2026-09-15, #155) and did NOT authorise an unconditional
+  # `rm -f`, nor deleting a file that is non-empty but suspect. These are the
+  # three names on this repo's sensitive list; the narrowness is the point.
+  #
+  # ⚠️ **What none of this checks is the contents.** `-s` catches 0 bytes and
+  # nothing else — a truncated-but-non-empty key passes every test here and is
+  # deleted by nothing. For `age.key` the only thing that would answer it is an
+  # `age-keygen -y` round-trip, which ferry133 considered and did NOT authorise
+  # (#149). **Do not add it without its own nod.**
+  #
+  # Measured with neutral filenames, stdin at EOF (2026-09-15): removing a
+  # 0-byte private key while its stale `.pub` remains is enough — `ssh-keygen`
+  # overwrites the `.pub` and exits 0. The TTY side of stdin was not measured
+  # here; the hang above was measured by `[5fe39a]` on a real walk.
+
   generate-age-key:
     internal: true
-    cmd: age-keygen --output {{.SOPS_AGE_KEY_FILE}}
+    cmds:
+      # Remove only a 0-byte leftover, so the generator is not asked to
+      # overwrite. Three tests, in order: absent -> nothing to do;
+      # non-empty -> leave it alone; otherwise -> remove.
+      - test ! -e {{.SOPS_AGE_KEY_FILE}} || test -s {{.SOPS_AGE_KEY_FILE}} || rm -f {{.SOPS_AGE_KEY_FILE}}
+      - age-keygen --output {{.SOPS_AGE_KEY_FILE}}
     status:
-      - test -f {{.SOPS_AGE_KEY_FILE}}
+      # `-s`, not `-f`: catches 0 bytes, NOT truncated-but-non-empty.
+      - test -s {{.SOPS_AGE_KEY_FILE}}
     preconditions:
       - which age-keygen
 
   generate-deploy-key:
     internal: true
-    cmd: ssh-keygen -t ed25519 -C "deploy-key" -f {{.ROOT_DIR}}/github-deploy.key -q -P ""
+    cmds:
+      # Remove only a 0-byte leftover, so the generator is not asked to
+      # overwrite. Three tests, in order: absent -> nothing to do;
+      # non-empty -> leave it alone; otherwise -> remove.
+      - test ! -e {{.ROOT_DIR}}/github-deploy.key || test -s {{.ROOT_DIR}}/github-deploy.key || rm -f {{.ROOT_DIR}}/github-deploy.key
+      - ssh-keygen -t ed25519 -C "deploy-key" -f {{.ROOT_DIR}}/github-deploy.key -q -P ""
     status:
-      - test -f {{.ROOT_DIR}}/github-deploy.key
+      # `-s`, not `-f`: catches 0 bytes, NOT truncated-but-non-empty.
+      - test -s {{.ROOT_DIR}}/github-deploy.key
     preconditions:
       - which ssh-keygen
 
   generate-push-token:
     internal: true
-    cmd: python -c "import secrets; print(secrets.token_hex(16))" > {{.ROOT_DIR}}/github-push-token.txt
+    cmds:
+      # Remove only a 0-byte leftover, so the generator is not asked to
+      # overwrite. Three tests, in order: absent -> nothing to do;
+      # non-empty -> leave it alone; otherwise -> remove.
+      - test ! -e {{.ROOT_DIR}}/github-push-token.txt || test -s {{.ROOT_DIR}}/github-push-token.txt || rm -f {{.ROOT_DIR}}/github-push-token.txt
+      - python -c "import secrets; print(secrets.token_hex(16))" > {{.ROOT_DIR}}/github-push-token.txt
     status:
-      - test -f {{.ROOT_DIR}}/github-push-token.txt
+      # `-s`, not `-f`: catches 0 bytes, NOT truncated-but-non-empty.
+      - test -s {{.ROOT_DIR}}/github-push-token.txt
 
   :configure:
     desc: Render and validate configuration files
@@ -73,6 +124,7 @@ tasks:
       - task: check-node-dns-path
       - task: check-nas-backup
       - task: check-private-repo-chain
+      - task: check-credential-expiry-pairing
       - task: generate-node-config
       - task: validate-schemas
       - task: render-configs
@@ -204,6 +256,22 @@ tasks:
     cmd: python3 {{.SCRIPTS_DIR}}/check-private-repo-chain.py
     preconditions:
       - test -f {{.SCRIPTS_DIR}}/check-private-repo-chain.py
+
+  # ferry133/jg-cluster-template#112. The pairing between a credential and its
+  # expiry is enforced at render time by plugin.py, which every user repo
+  # carries its own copy of — and that copy is the thing this guards. A repo
+  # whose plugin.py has drifted back to a version without the pairing renders
+  # happily, and nothing says so: template copies are independent and do not
+  # follow upstream on their own. Running it here means it runs in each user
+  # repo at `task configure`, against that repo's own copy, rather than only in
+  # this repo's CI where no cluster.yaml is ever visible (FO-openspec [8e8ef1]
+  # measured that gap: zero hits here, nine other checks wired, so the zero was
+  # about pairing and not about asking the wrong file).
+  check-credential-expiry-pairing:
+    internal: true
+    cmd: python3 {{.SCRIPTS_DIR}}/check-credential-expiry-pairing.py
+    preconditions:
+      - test -f {{.SCRIPTS_DIR}}/check-credential-expiry-pairing.py
 
   validate-schemas:
     internal: true

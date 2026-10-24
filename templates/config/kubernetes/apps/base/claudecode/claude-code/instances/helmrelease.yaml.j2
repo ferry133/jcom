@@ -193,6 +193,20 @@ spec:
                   secretKeyRef:
                     name: talos-mcp-secret
                     key: omniEndpoint
+              # The OPTIONAL os:operator credential (jg-base
+              # im-onsite-operator-tools): the direct-LAN read fallback for
+              # when SideroLink is down, and the gated reboot_node tool. A
+              # PATH, like TALOSCONFIG. Not gated on talos_operator_config on
+              # purpose: with no mount below the file is simply missing, which
+              # the server reads as absent -- the same answer as 0 bytes.
+              TALOS_OPERATOR_CONFIG: /etc/talos-mcp/operator-talosconfig
+              # This pod is hostNetwork, so the pod IP IS the node IP:
+              # reboot_node compares its target against it to know it is
+              # rebooting the node it sits on (then no --wait).
+              POD_IP:
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
             securityContext:
               allowPrivilegeEscalation: false
               capabilities: { drop: ["ALL"] }
@@ -413,6 +427,14 @@ spec:
               - path: /etc/talos-mcp/talosconfig
                 subPath: talosconfig
                 readOnly: true
+#% if talos_operator_config is defined %#
+              # The os:operator credential, at the path TALOS_OPERATOR_CONFIG
+              # names above. Same key of the same Secret the base im reads
+              # (jg-base talos-mcp-secret.yaml, data.operatorConfig).
+              - path: /etc/talos-mcp/operator-talosconfig
+                subPath: operatorConfig
+                readOnly: true
+#% endif %#
 #% endif %#
     defaultPodOptions:
       hostNetwork: true

@@ -83,7 +83,45 @@ def git(template: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def stale_or_edited(template: Path, rel: Path, cluster_file: Path) -> str:
+def staleness_undetermined(template: Path) -> str | None:
+    """Can this checkout answer "was it edited?" at all — jgct#195.
+
+    `stale_or_edited()` decides by looking the cluster's bytes up in this
+    checkout's history. A checkout that has not fetched does not *have* the
+    newer blobs, so a synced file falls through to the strongest phrase the
+    tool owns. Measured 2026-09-24: a `cluster.schema.cue` byte-identical to
+    jgct `origin/main` was reported `edited locally`, from a checkout 146
+    commits behind.
+
+    Returns `None` when the question is answerable, or a sentence naming why
+    it is not. **The two unanswerable cases get different sentences on
+    purpose**: "behind 0 commits" and "there is no `origin/main` to ask" are
+    both an absent distance, and only one of them means the classification can
+    be trusted. This repo has paid for that shape twice already — jgct#171's
+    `population` printed a hit count, jgct#178's index cell printed the same
+    line for four different reasons.
+
+    Deliberately does **not** fetch. A reporting tool that mutates the repo it
+    is reporting on has changed the thing it measures, and it would fail
+    confusingly offline. It reports; the reader decides whether to fetch.
+    """
+    head = git(template, "rev-parse", "--verify", "-q", "origin/main")
+    if head.returncode != 0:
+        return ("no `origin/main` in the template checkout, so how far behind "
+                "it is cannot be asked (not fetched, or no remote)")
+    behind = git(template, "rev-list", "--count", "HEAD..origin/main")
+    if behind.returncode != 0:
+        return "could not count commits between HEAD and origin/main"
+    n = behind.stdout.strip()
+    if n.isdigit() and int(n) > 0:
+        plural = "commit" if n == "1" else "commits"
+        return (f"template checkout is {n} {plural} behind origin/main, so a "
+                f"version newer than it may exist and would not be found here")
+    return None
+
+
+def stale_or_edited(template: Path, rel: Path, cluster_file: Path,
+                    undetermined: str | None = None) -> str:
     """Is the cluster's copy an older version of this file, or an edited one?
 
     `#54`: this report used to say only that the bytes differ, and left the
@@ -130,6 +168,16 @@ def stale_or_edited(template: Path, rel: Path, cluster_file: Path) -> str:
             # It matched the newest commit touching this path, yet the bytes
             # differ from what is on disk here. The difference is the
             # template's own working tree, not the cluster.
+            if undetermined:
+                # "The newest commit for this path" is a claim about this
+                # checkout, and this checkout is behind — so the sentence
+                # below would blame uncommitted local work for what is just a
+                # missing fetch. jgct#195.
+                return (
+                    f"matches template {sha[:7]} ({date}), the newest commit"
+                    f" for this path IN THIS CHECKOUT — staleness undetermined:"
+                    f" {undetermined}"
+                )
             return (
                 f"matches template {sha[:7]} ({date}), the newest commit for this"
                 " path — the difference is uncommitted work in the TEMPLATE"
@@ -138,6 +186,13 @@ def stale_or_edited(template: Path, rel: Path, cluster_file: Path) -> str:
             f"stale: this is template {sha[:7]} ({date}), "
             f"{newer} newer version(s) of this file since"
         )
+    if undetermined:
+        # The one claim that needs the data this checkout does not have.
+        # `stale:` above survives — bytes found in the local history really
+        # were a version of this path — but "no version this path EVER had" is
+        # a statement about the whole history, and this copy of it is partial.
+        return (f"staleness undetermined: these bytes match no version this "
+                f"checkout can see, and {undetermined}")
     return "edited locally: these bytes are no version this path ever had"
 
 
@@ -220,14 +275,33 @@ def main() -> int:
 
     print(f"cluster:  {cluster}")
     print(f"template: {template}")
-    print(f"compared: {len(theirs & ours)} shared files\n")
+    print(f"compared: {len(theirs & ours)} shared files")
+    # The limit of this run, printed next to its verdict rather than implied by
+    # its absence (jgct#195, and the same rule jgct#171 put on the deep scan).
+    undetermined = staleness_undetermined(template)
+    if undetermined:
+        print(f"⚠️  staleness undetermined: {undetermined}")
+        print("    `edited locally` is withheld this run — it is the one answer")
+        print("    that needs the versions this checkout does not have.")
+        # Measured 2026-09-25, not inferred: a file the template gained after
+        # this checkout was taken is absent from BOTH sides, so it is not
+        # BEHIND, and with nothing else drifting the run exits 0. The issue
+        # listed this as unmeasured; it is now measured, and the verdict is
+        # NOT changed here — that would be a second behaviour change riding on
+        # this one. What changes is that the reader is told.
+        print("    ⚠️  BEHIND is under-reported too: a file added upstream after")
+        print("        this checkout is missing from both sides, so it is not")
+        print("        counted — and a run with nothing else wrong exits 0.")
+    else:
+        print("checkout: level with origin/main, so stale-vs-edited is decidable")
+    print()
 
     for label, rows in (
         (
             "DRIFTED",
             [
                 (p, f"{n} changed lines; "
-                    + stale_or_edited(template, p, cluster / p))
+                    + stale_or_edited(template, p, cluster / p, undetermined))
                 for p, n in drifted
             ],
         ),

@@ -116,6 +116,39 @@ spec:
               target:
                 group: helm.toolkit.fluxcd.io
                 kind: HelmRelease
+#|         The QUIC repair, when this cluster's egress blocks UDP 7844.
+
+           It goes HERE, inside the nested patches list, and not as another
+           entry in the outer `patches:` below — for the same reason the
+           suspend patches further down are scalar-only. A second outer patch
+           that set `spec.patches` would replace this whole nested list
+           wholesale, taking the generic HelmRelease strategy with it.
+
+           Rendered from cluster.yaml rather than pasted into the generated
+           file, so it survives the next `task configure`. Before the field
+           existed the fix lived in one person's clone and the next render
+           removed it without saying so. #|
+#% if (cloudflare_tunnel_transport | default('quic')) == 'http2' %#
+            # cloudflare_tunnel_transport: http2 — this site's egress blocks UDP 7844.
+            - patch: |-
+                apiVersion: helm.toolkit.fluxcd.io/v2
+                kind: HelmRelease
+                metadata:
+                  name: cloudflare-tunnel
+                spec:
+                  values:
+                    controllers:
+                      cloudflare-tunnel:
+                        containers:
+                          app:
+                            env:
+                              TUNNEL_POST_QUANTUM: false
+                              TUNNEL_TRANSPORT_PROTOCOL: http2
+              target:
+                group: helm.toolkit.fluxcd.io
+                kind: HelmRelease
+                name: cloudflare-tunnel
+#% endif %#
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
@@ -150,12 +183,6 @@ spec:
      to fall back from. Disable it only where the cluster has its own resolver
      serving those names. #|
 #% set _ = _disabled.append(('k8s-gateway', 'this cluster declares it resolves internal names by other means')) %#
-#% endif %#
-#% if deployment_profile != 'appliance' %#
-#|   Only an appliance is expected to land on a LAN nobody has surveyed. Every
-     other profile declares its addresses in cluster.yaml, and a probe writing a
-     second pool there would overlap the declared one. #|
-#% set _ = _disabled.append(('lan-address-probe', 'this profile declares its LAN addresses in cluster.yaml, so there is nothing to discover')) %#
 #% endif %#
 #% if is_single_node %#
 #|   Spegel is a peer-to-peer image mirror; with no peers its router never
@@ -239,6 +266,66 @@ spec:
      A cluster on basic auth gets the disabled (empty) path: Flux prunes the
      base HelmRelease if it ever ran (the PVCs carry retain:true and survive),
      and the cluster's own basic-auth instance renders from claude_instances. #|
+#|   lan-address-probe: the two-position switch that used to be a suspend
+     (jgct#189, ferry133/jg-base#141).
+
+     Only an appliance is expected to land on a LAN nobody has surveyed; every
+     other profile declares its addresses in cluster.yaml, and a probe writing
+     a second pool there would overlap the declared one. That part has not
+     changed -- what changed is how "off" is expressed.
+
+     Off used to be `suspend: true`. **Suspend stops Flux, not the pod.**
+     Measured twice on this component:
+
+       2026-08-19  jcom: suspended=true with the Deployment still Running 7
+                   days later and a stray pool-discovered no Service used.
+                   (Quoted verbatim in jg-base's longhorn/backup/disabled.)
+
+       2026-09-21  A live profile migration: the two pools were deleted per the
+                   runbook at 15:25:48 and were **back at 15:25:53** -- five
+                   seconds. The cluster ended with the declared static pool plus
+                   two PoolConflict=True/cidr_overlap leftovers. The static pool
+                   won that conflict because it was created 8 minutes earlier,
+                   so traffic was fine -- but **which side wins is decided by
+                   creation order, not by design**. The losing shape is "the
+                   declared address never took effect and the cluster looks
+                   completely healthy".
+
+     So off is `path: .../lan-address/disabled`, an empty directory, with the
+     Kustomization still reconciling: its inventory goes empty and Flux prunes
+     the Deployment, the namespace and both pools together. The alarm stays
+     armed because the object stays alive -- the same shape longhorn-backup and
+     claude-code-im already use, and whose documentation cites THIS component
+     as the measured example.
+
+     ⚠️ The positions are `app` / `disabled`, not `enabled` / `disabled`:
+     jg-base keeps the live manifests in `lan-address/app/`, and renaming that
+     would change spec.path for every cluster that already has this
+     Kustomization, in exchange for symmetry. Both names are already in
+     plugin.py's LIVE_POSITIONS / EMPTY_POSITIONS and in
+     check-ks-position-labels.py's CASES, so this costs no new vocabulary.
+
+     ⚠️ This patch must not land before ferry133/jg-base#141 creates that
+     directory: a path that does not exist in jg-base is a Flux error, which is
+     worse than the suspend it replaces. Same ordering constraint as
+     claudecode-db below ("must land AFTER PR#86"). #|
+#|   The profile test is hoisted into a boolean on purpose. The position slot
+     is read by check-ks-position-labels.py, which collects **every quoted
+     literal** on those lines and calls each one a position — deliberately
+     over-collecting, because under-collecting is the failure that matters.
+     Writing `'app' if deployment_profile == 'appliance' else 'disabled'`
+     inline therefore offers it `'appliance'`, and it correctly refuses a
+     position that is in neither vocabulary. Measured, not predicted: that is
+     exactly how this line failed the guard on its first draft. The two
+     switches below use the same shape for the same reason. #|
+#% set _probe_discovers = deployment_profile == 'appliance' %#
+#% set _ = _enabled.append((
+     'lan-address-probe',
+     './kubernetes/apps/base/network/lan-address',
+     'app' if _probe_discovers else 'disabled',
+     'an appliance lands on a LAN nobody has surveyed, so it discovers its address at runtime'
+        if _probe_discovers
+        else 'this profile declares its LAN addresses in cluster.yaml: an empty path so Flux prunes the probe and the pools it owns, rather than a suspend that would leave the pod recreating them')) %#
 #% set _ = _enabled.append((
      'claude-code-im',
      './kubernetes/apps/base/claudecode/claude-code/im',
@@ -476,8 +563,36 @@ spec:
 
    storage/nfs-subdir is likewise a base app, but it IS conditional, so it is
    disabled by the suspend patch on cluster-apps-base above rather than here. #|
-#% set _now_base = ['claudecode/claude-code', 'monitoring/daily-check', 'storage/local-path-provisioner', 'default/echo'] %#
-#% for extra in extras | default([]) if extra not in _now_base %#
+#| The filtered list is computed once in plugin.py (`extras_from_repo`,
+   `EXTRAS_NOW_BASE`): the deploy-key Secret template needs the same answer,
+   and two copies of a filter drift.
+
+   Since jgct#217 (fleet-ops root `split-extras-repo`) the extras come from
+   their own private repo, ferry133/jg-extras, which keeps the
+   `kubernetes/apps/extras/<ns>/<app>` layout so every `path:` below is
+   unchanged. Only `sourceRef.name` moves. The jg-base GitRepository above is
+   not renamed or touched (see its comment for why). #|
+#% if extras_from_repo %#
+---
+# ── GitRepository — the optional apps (private; per-cluster deploy key) ──────
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: jg-extras
+  namespace: flux-system
+spec:
+  interval: 1h
+  # Quoted for the reason the jg-base GitRepository gives.
+  url: "#{ extras_repo_url }#"
+  ref:
+    #{ extras_repo_ref_kind }#: "#{ extras_repo_ref }#"
+  # Rendered by components/sops/jg-extras-deploy-key.sops.yaml.j2 from this
+  # directory's jg-extras.deploy.key; keys identity / known_hosts, the same
+  # shape as the root sync's github-deploy-key.
+  secretRef:
+    name: jg-extras-deploy-key
+#% endif %#
+#% for extra in extras_from_repo %#
 #% set _app = extra.split('/')[1] %#
 ---
 # ── extras/#{extra}# ─────────────────────────────────────────────────────────
@@ -495,7 +610,7 @@ spec:
   prune: true
   sourceRef:
     kind: GitRepository
-    name: jg-base
+    name: jg-extras
     namespace: flux-system
   postBuild:
     substituteFrom:
@@ -504,3 +619,96 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 #% endfor %#
+#| ── Standalone app repos (tenants) ──────────────────────────────────────────
+   jgct#214 task 3.3, fleet-ops root `standalone-app-repos` design D1/D5.
+   Rendered only when app_repos is non-empty: with none declared this file must
+   be byte-identical to what it was before tenants existed, and
+   check-tenant-render.py asserts exactly that.
+
+   Everything Flux needs for a tenant lives in flux-system (D1); the tenant only
+   gets namespaces. What isolates it is that its Kustomization runs as
+   `tenant-<name>`, a ServiceAccount bound (by cluster-tenants, task 3.4) to
+   `tenant-admin` in its declared namespaces and nowhere else. So, deliberately:
+
+     - NO postBuild.substituteFrom: cluster-secrets is every credential the
+       cluster has, and substitution would hand it to whatever the tenant
+       writes as `${VAR}`.
+     - decryption.secretRef: the tenant's OWN age key. The cluster key never
+       decrypts a tenant file (D2), and secretRef does not fall back to it
+       (root spike 1.1).
+     - no targetNamespace: a tenant may declare several namespaces, and an
+       object that names none is applied in flux-system, where the SA has no
+       verbs — it fails loudly instead of landing somewhere.
+
+   cluster-tenants applies ./kubernetes/tenants (namespaces, RoleBindings,
+   quotas, policies and the sops Secrets these objects reference), so every
+   tenant Kustomization depends on it. #|
+#% if app_repos %#
+---
+# ── cluster-tenants — namespace-level objects and Secrets for every tenant ──
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cluster-tenants
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/tenants
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
+#% for repo in app_repos %#
+---
+# ── tenant #{ repo.name }# (#{ repo.kind }#: #{ repo.repository }#) ──
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tenant-#{ repo.name }#
+  namespace: flux-system
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: tenant-#{ repo.name }#
+  namespace: flux-system
+spec:
+  interval: 1h
+  url: "ssh://git@github.com/#{ repo.repository }#.git"
+  ref:
+    # Quoted for the reason the jg-base GitRepository above gives.
+    branch: "#{ repo.branch }#"
+  # Read-only deploy key, rendered by cluster-tenants (task 3.4), same keys as
+  # the root sync's github-deploy-key: identity, known_hosts.
+  secretRef:
+    name: tenant-#{ repo.name }#-git-auth
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: tenant-#{ repo.name }#
+  namespace: flux-system
+spec:
+  serviceAccountName: tenant-#{ repo.name }#
+  decryption:
+    provider: sops
+    secretRef:
+      name: tenant-#{ repo.name }#-sops-age
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: tenant-#{ repo.name }#
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-tenants
+#% endfor %#
+#% endif %#

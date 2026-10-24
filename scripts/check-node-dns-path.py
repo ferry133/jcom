@@ -66,6 +66,16 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def load_plugin():
     """Import templates/scripts/plugin.py without a real makejinja."""
+    # No bytecode: these guards get run against a MUTATED plugin.py to show
+    # they can still tell right from wrong, and CPython accepts a cached .pyc
+    # when the source mtime (one-second resolution) AND size still match. A
+    # minimal mutation is exactly the shape that matches both -- swap a word
+    # for one of equal length, restore within the same second, and the stale
+    # bytecode is served. Both directions have been seen; the quiet one is a
+    # negative control that passes for a reason that no longer exists
+    # (jgct#96, reproduced deterministically 2026-09-10).
+    sys.dont_write_bytecode = True
+    importlib.invalidate_caches()
     mj = types.ModuleType("makejinja")
     pl = types.ModuleType("makejinja.plugin")
 
