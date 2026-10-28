@@ -161,7 +161,8 @@ def run_cases() -> int:
             {"app_repos": [vendor()]},
             lambda d: expect(d, 0, branch="main", namespaces=["acme"],
                              quota={"cpu": "4", "memory": "8Gi", "pods": 50},
-                             grants={"lan_ip": 0}, psa_level="restricted"))
+                             grants={"lan_ip": 0, "devices": {}}, psa_level="restricted",
+                             device_quota={"serial": 0}))
     accepts("a partial quota keeps what it set and fills the rest",
             {"app_repos": [vendor(quota={"cpu": "2"})]},
             lambda d: expect(d, 0, quota={"cpu": "2", "memory": "8Gi", "pods": 50}))
@@ -220,13 +221,128 @@ def run_cases() -> int:
              "app_repos": [lan(1, "192.0.2.200", "192.0.2.200")]},
             "appliance", "discovered at runtime")
 
-    # Grants with no platform component yet.
-    refuses("l2 is refused, naming the missing component",
-            {"app_repos": [vendor(grants={"l2": True})]},
-            "grants.l2", "jg-base#187", "task 8.1")
-    refuses("devices is refused, naming the missing component",
-            {"app_repos": [vendor(grants={"devices": ["/dev/ttyUSB0"]})]},
-            "grants.devices", "jg-base#188", "task 8.2")
+    # grants.l2 (jg-base#187, jgct#240). The shared pool is 192.0.2.10-11 and
+    # the assumed gateway .1, so .20-.21 is clear of everything.
+    def l2(start, stop, iface="enp1s0", **kw):
+        return vendor(grants={"l2": True},
+                      l2_network=dict(interface=iface, start=start, stop=stop), **kw)
+    ROUTED = {"lan_routed_cidrs": ["198.51.100.0/24"]}
+
+    def nads(d, i=0):
+        return [(n["name"], json.loads(n["config"])) for n in entry(d, i)["l2_nads"]]
+
+    def l2_ok(d):
+        got = nads(d)
+        want_names = ["lan-192-0-2-20", "lan-192-0-2-21"]
+        conf = got[0][1] if got else {}
+        plugins = conf.get("plugins", [])
+        cfg = plugins[0] if plugins else {}
+        ok = ([n for n, _ in got] == want_names
+              and conf.get("name") == want_names[0] and "type" not in conf
+              and [p.get("type") for p in plugins] == ["macvlan", "sbr"]
+              and cfg.get("master") == "enp1s0"
+              and cfg.get("ipam", {}).get("addresses") == [{"address": "192.0.2.20/24"}]
+              and cfg.get("ipam", {}).get("routes") == [{"dst": "198.51.100.0/24",
+                                                         "gw": "192.0.2.1"}]
+              and "gateway" not in cfg.get("ipam", {}))
+        return ok, f"got {got}"
+    accepts("l2 renders one NAD per address as a macvlan+sbr conflist, routes via the gateway, no default route",
+            dict(ROUTED, app_repos=[l2("192.0.2.20", "192.0.2.21")]), l2_ok)
+    accepts("l2 with lan_routed_cidrs [] renders NADs with no routes",
+            {"lan_routed_cidrs": [], "app_repos": [l2("192.0.2.20", "192.0.2.20")]},
+            lambda d: (nads(d)[0][1]["plugins"][0]["ipam"]["routes"] == [], f"got {nads(d)}"))
+    accepts("l2 leaves the PSA level alone (restricted)",
+            dict(ROUTED, app_repos=[l2("192.0.2.20", "192.0.2.20")]),
+            lambda d: expect(d, 0, psa_level="restricted"))
+    accepts("no l2 tenant: lan_routed_cidrs is not required and l2_nads absent",
+            {"app_repos": [vendor()]},
+            lambda d: ("l2_nads" not in entry(d), f"entry={entry(d)}"))
+    refuses("l2 without l2_network is refused",
+            dict(ROUTED, app_repos=[vendor(grants={"l2": True})]),
+            "grants.l2 is set without l2_network")
+    refuses("l2_network without the grant is refused",
+            dict(ROUTED, app_repos=[vendor(l2_network=dict(
+                interface="enp1s0", start="192.0.2.20", stop="192.0.2.20"))]),
+            "l2_network is set but grants.l2 is not")
+    refuses("l2 without lan_routed_cidrs is refused, saying [] is the way out",
+            {"app_repos": [l2("192.0.2.20", "192.0.2.20")]},
+            "lan_routed_cidrs is not set", "or [] if there is none")
+    refuses("a lan_routed_cidrs entry overlapping node_cidr is refused",
+            {"lan_routed_cidrs": ["192.0.2.0/25"],
+             "app_repos": [l2("192.0.2.20", "192.0.2.20")]},
+            "192.0.2.0/25 overlaps node_cidr 192.0.2.0/24")
+    refuses("overlapping lan_routed_cidrs entries are refused, naming both",
+            {"lan_routed_cidrs": ["198.51.100.0/24", "198.51.100.128/25"],
+             "app_repos": [l2("192.0.2.20", "192.0.2.20")]},
+            "198.51.100.0/24 and 198.51.100.128/25 overlap")
+    refuses("a lan_routed_cidrs entry with host bits is refused",
+            {"lan_routed_cidrs": ["198.51.100.7/24"],
+             "app_repos": [l2("192.0.2.20", "192.0.2.20")]},
+            "198.51.100.7/24", "host bits")
+    refuses("a gateway outside node_cidr is refused",
+            dict(ROUTED, node_default_gateway="203.0.113.1",
+                 app_repos=[l2("192.0.2.20", "192.0.2.20")]),
+            "node_default_gateway 203.0.113.1 is outside node_cidr")
+    refuses("an l2 range outside node_cidr is refused",
+            dict(ROUTED, app_repos=[l2("203.0.113.20", "203.0.113.20")]),
+            "not inside node_cidr 192.0.2.0/24")
+    refuses("an l2 range holding the gateway is refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.1", "192.0.2.2")]),
+            "includes node_default_gateway 192.0.2.1")
+    refuses("an l2 range holding the broadcast address is refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.250", "192.0.2.255")]),
+            "broadcast")
+    refuses("an l2 range holding a node is refused, naming it",
+            dict(ROUTED, nodes=[{"name": "n1", "address": "192.0.2.30"}],
+                 app_repos=[l2("192.0.2.29", "192.0.2.31")]),
+            "includes node n1 (192.0.2.30)")
+    refuses("an l2 range overlapping the shared pool is refused (first address)",
+            dict(ROUTED, app_repos=[l2("192.0.2.11", "192.0.2.12")]),
+            "overlaps lb_pool_blocks")
+    refuses("an l2 range overlapping the shared pool is refused (last address)",
+            dict(ROUTED, app_repos=[l2("192.0.2.5", "192.0.2.10")]),
+            "overlaps lb_pool_blocks")
+    refuses("an l2 range overlapping another tenant's lan_ip_range is refused",
+            dict(ROUTED, app_repos=[lan(1, "192.0.2.200", "192.0.2.200"),
+                                    l2("192.0.2.200", "192.0.2.200", name="other",
+                                       repository="fixture/other")]),
+            "app_repos[other].l2_network", "app_repos[acme].lan_ip_range")
+    refuses("a lan_ip_range overlapping an earlier tenant's l2 range is refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.200", "192.0.2.200"),
+                                    lan(1, "192.0.2.200", "192.0.2.200", name="other",
+                                        repository="fixture/other")]),
+            "app_repos[other].lan_ip_range", "app_repos[acme].l2_network")
+    refuses("two tenants' l2 ranges overlapping are refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.20", "192.0.2.21"),
+                                    l2("192.0.2.21", "192.0.2.22", name="other",
+                                       repository="fixture/other")]),
+            "app_repos[other].l2_network", "app_repos[acme].l2_network")
+    refuses("an l2 range wider than 16 addresses is refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.20", "192.0.2.36")]),
+            "holds 17 addresses", "at most 16")
+    refuses("an l2 range with stop below start is refused",
+            dict(ROUTED, app_repos=[l2("192.0.2.21", "192.0.2.20")]),
+            "stop is below start")
+    accepts("on an appliance an l2 range below the probe window renders",
+            dict(ROUTED, deployment_profile="appliance",
+                 app_repos=[l2("192.0.2.19", "192.0.2.19")]),
+            lambda d: ([n for n, _ in nads(d)] == ["lan-192-0-2-19"], f"got {nads(d)}"))
+    refuses("on an appliance an l2 range touching the probe window is refused",
+            dict(ROUTED, deployment_profile="appliance",
+                 app_repos=[l2("192.0.2.195", "192.0.2.200")]),
+            "192.0.2.200-192.0.2.254", "lan-address-probe")
+
+    # grants.devices (jg-base#188): a class -> count map, every class quoted
+    # in the quota (0 without the grant), and only classes jg-base advertises.
+    accepts("devices {serial: 2} -> device_quota serial 2, PSA unchanged",
+            {"app_repos": [vendor(grants={"devices": {"serial": 2}})]},
+            lambda d: expect(d, 0, device_quota={"serial": 2}, psa_level="restricted"))
+    accepts("no devices grant -> device_quota serial 0 (the second fence)",
+            {"app_repos": [vendor(grants={"baseline": True})]},
+            lambda d: expect(d, 0, device_quota={"serial": 0}))
+    refuses("a device class jg-base does not advertise is refused, listing what exists",
+            {"app_repos": [vendor(grants={"devices": {"zigbee": 1}})]},
+            "grants.devices names zigbee", "it has: serial")
 
     # tenant_key(): the file-name contract with the provisioning skill.
     def key_case(label, files, kind, must, forbid=""):

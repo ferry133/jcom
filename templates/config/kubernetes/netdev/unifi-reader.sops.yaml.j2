@@ -1,0 +1,18 @@
+#% if netdev_enabled %#
+---
+# The netdev-mcp reader's credentials. jg-base mounts the whole Secret, not a
+# subPath, at /etc/netdev-mcp/reader on that container only: ca.crt is what
+# TLS to the console is verified against (there is no switch to skip it),
+# reader-key the console's read-only Integration API key.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unifi-reader
+  namespace: claudecode
+stringData:
+  ca.crt: |
+    #% filter indent(width=4, first=False) %#
+    #{ unifi_ca_cert | trim }#
+    #% endfilter %#
+  reader-key: #{ unifi_reader_key | trim | tojson }#
+#% endif %#

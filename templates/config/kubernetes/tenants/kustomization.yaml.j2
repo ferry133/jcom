@@ -15,6 +15,9 @@ resources:
 #% if app_repos | selectattr('grants.lan_ip') | list %#
   - lb-pools.yaml
 #% endif %#
+#% if app_repos | selectattr('grants.l2') | list %#
+  - l2-networks.yaml
+#% endif %#
   - tenant-git-auth.sops.yaml
   - tenant-sops-age.sops.yaml
 #% if app_repos | selectattr('kind', 'equalto', 'agent') | list %#

@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import ipaddress
 import json
 import os
 import shutil
@@ -284,10 +285,12 @@ def checkout(ref: str, dest: Path) -> None:
 # refused as an appliance.
 TENANT_BASE = "full-omni-extras"
 TENANTS = [
-    dict(name="acme", repository="fixture/acme-app", kind="vendor"),
+    # public: false spelled out is the negative control for the label (jgct#250).
+    dict(name="acme", repository="fixture/acme-app", kind="vendor",
+         grants=dict(public=False)),
     dict(name="im-apps", repository="fixture/im-apps", kind="agent",
          namespaces=["im-apps", "im-apps-db"], branch="prod",
-         grants=dict(baseline=True, lan_ip=1),
+         grants=dict(baseline=True, lan_ip=1, public=True),
          lan_ip_range=dict(start="192.0.2.200", stop="192.0.2.200")),
     # host_network: PSA privileged, the granted label, no `world` (root 3.7).
     dict(name="edge", repository="fixture/edge-app", kind="vendor",
@@ -296,6 +299,28 @@ TENANTS = [
 # A cluster with vendors only renders no agent objects at all: no
 # im-apps-write-key file, no IM_APPS_REPO (root 3.7).
 VENDOR_ONLY = [TENANTS[0]]
+# grants.l2 (jg-base#187, jgct#240): two NADs in the FIRST of two namespaces,
+# the l2 label only there, routes back to one other subnet, and the multus
+# switch flipped to `enabled` -- the one non-tenant line an l2 tenant may change.
+TENANTS_L2 = [
+    dict(name="homekit", repository="fixture/homekit", kind="vendor",
+         namespaces=["homekit", "homekit-db"], grants=dict(l2=True),
+         l2_network=dict(interface="enp1s0", start="192.0.2.20", stop="192.0.2.21")),
+]
+L2_EXTRA = {"lan_routed_cidrs": ["198.51.100.0/24"]}
+# grants.devices (jg-base#188): the label on EVERY namespace, the quota line in
+# each, and the device-plugin switch at `enabled`.
+TENANTS_DEVICES = [
+    dict(name="zwave", repository="fixture/zwave", kind="vendor",
+         namespaces=["zwave", "zwave-db"], grants=dict(devices={"serial": 1})),
+]
+# The two-position switches a tenant grant flips, each with the predicate that
+# turns it on. These are the only non-tenant lines a tenant may change.
+GRANT_SWITCHES = [
+    ("./kubernetes/apps/base/kube-system/multus/", lambda g: bool(g.get("l2"))),
+    ("./kubernetes/apps/base/kube-system/generic-device-plugin/",
+     lambda g: bool(g.get("devices"))),
+]
 SAMPLE = "cluster.sample.yaml"
 BOOTSTRAP_KEY = "templates/config/bootstrap/github-deploy-key.sops.yaml.j2"
 
@@ -320,7 +345,25 @@ def sample_example(tree: Path) -> list[dict]:
                           capture_output=True)
     if proc.returncode != 0:
         raise RuntimeError(f"{SAMPLE} example does not parse: {proc.stderr.decode().strip()}")
-    return json.loads(proc.stdout)["app_repos"]
+    repos = json.loads(proc.stdout)["app_repos"]
+    # Its `lan_routed_cidrs:` example travels with it: the l2 entry above is
+    # refused without one. `10.9.y.` becomes the TEST-NET-2 that L2_EXTRA uses,
+    # so the NAD routes are asserted against what the sample says to write.
+    routed = [l for l in lines if l.startswith("# lan_routed_cidrs: [")]
+    if len(routed) != 1:
+        raise RuntimeError(f"{SAMPLE}: expected one `# lan_routed_cidrs: [...]` example, "
+                           f"found {len(routed)}")
+    text = routed[0][2:].replace("10.9.y.", "198.51.100.")
+    proc = subprocess.run([tool("yq"), "-o=json", "."], input=text.encode(),
+                          capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"{SAMPLE} lan_routed_cidrs example does not parse: "
+                           f"{proc.stderr.decode().strip()}")
+    extra = json.loads(proc.stdout)
+    if extra != L2_EXTRA:
+        raise RuntimeError(f"{SAMPLE} lan_routed_cidrs example became {extra}, "
+                           f"expected {L2_EXTRA} (guard defect)")
+    return repos
 
 
 def bootstrap_known_hosts(tree: Path) -> list[str]:
@@ -331,6 +374,15 @@ def bootstrap_known_hosts(tree: Path) -> list[str]:
 KS = "kubernetes/flux/cluster/ks.yaml"
 CS = "kubernetes/components/sops/cluster-secrets.sops.yaml"
 TD = "kubernetes/tenants/"
+
+
+def yq_value(text: str):
+    """One YAML document of any shape (a JSON patch is a list), via yq."""
+    proc = subprocess.run([tool("yq"), "-o=json", "."], input=text.encode(),
+                          capture_output=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"yq could not parse: {proc.stderr.decode().strip()}")
+    return json.loads(proc.stdout or b"null")
 
 
 def docs(body: bytes) -> list[dict]:
@@ -353,12 +405,15 @@ def tenant_objects(files: dict[str, bytes], tenants: list[dict],
     bad: list[str] = []
     rendered = {p[len(TD):]: b for p, b in files.items() if p.startswith(TD)}
     lan = [t for t in tenants if (t.get("grants") or {}).get("lan_ip")]
+    l2 = [t for t in tenants if (t.get("grants") or {}).get("l2")]
     agents = [t for t in tenants if t["kind"] == "agent"]
     want_files = {"kustomization.yaml", "namespaces.yaml", "rbac.yaml", "quota.yaml",
                   "networkpolicy.yaml", "tenant-git-auth.sops.yaml",
                   "tenant-sops-age.sops.yaml"}
     if lan:
         want_files.add("lb-pools.yaml")
+    if l2:
+        want_files.add("l2-networks.yaml")
     if agents:
         want_files.add("im-apps-write-key.sops.yaml")
     if set(rendered) != want_files:
@@ -402,6 +457,12 @@ def tenant_objects(files: dict[str, bytes], tenants: list[dict],
                 want["jg.tenant-privileged"] = "granted"
             if g.get("lan_ip"):
                 want["jg.tenant-lan-ip"] = "granted"
+            if g.get("devices"):
+                want["jg.tenant-devices"] = "granted"
+            if g.get("l2") and ns == nss[0]:
+                want["jg.tenant-l2"] = "granted"
+            if g.get("public"):
+                want["jg.tenant-public"] = "granted"
             eq(f"Namespace/{ns} labels", labels, want)
             rb = get("RoleBinding", ns, f"tenant-{t['name']}")
             eq(f"RoleBinding {ns} roleRef", rb.get("roleRef"),
@@ -414,7 +475,8 @@ def tenant_objects(files: dict[str, bytes], tenants: list[dict],
                {"hard": {"requests.cpu": str(q["cpu"]), "requests.memory": str(q["memory"]),
                          "pods": str(q["pods"]),
                          "services.loadbalancers": str(g.get("lan_ip", 0)),
-                         "services.nodeports": "0"}})
+                         "services.nodeports": "0",
+                         "requests.devic.es/serial": str((g.get("devices") or {}).get("serial", 0))}})
             lr = get("LimitRange", ns, "tenant-defaults")
             eq(f"LimitRange {ns} type", [l.get("type") for l in lr.get("spec", {}).get("limits", [])],
                ["Container"])
@@ -448,6 +510,26 @@ def tenant_objects(files: dict[str, bytes], tenants: list[dict],
                {"matchLabels": {"jg.tenant": t["name"]},
                 "matchExpressions": [{"key": "io.kubernetes.service.namespace",
                                       "operator": "In", "values": nss}]})
+        if g.get("l2"):
+            net = t["l2_network"]
+            first = int(ipaddress.ip_address(net["start"]))
+            last = int(ipaddress.ip_address(net["stop"]))
+            for i in range(first, last + 1):
+                addr = str(ipaddress.ip_address(i))
+                nad_name = "lan-" + addr.replace(".", "-")
+                nad = get("NetworkAttachmentDefinition", nss[0], nad_name)
+                try:
+                    cfg = json.loads(nad.get("spec", {}).get("config", "{}"))
+                except ValueError as e:
+                    bad.append(f"NAD {nss[0]}/{nad_name}: config is not JSON: {e}")
+                    continue
+                eq(f"NAD {nss[0]}/{nad_name} config", cfg,
+                   {"cniVersion": "0.3.1", "name": nad_name, "plugins": [
+                       {"type": "macvlan", "master": net["interface"], "mode": "bridge",
+                        "ipam": {"type": "static", "addresses": [{"address": f"{addr}/24"}],
+                                 "routes": [{"dst": c, "gw": "192.0.2.1"}
+                                            for c in L2_EXTRA["lan_routed_cidrs"]]}},
+                       {"type": "sbr"}]})
         if t["kind"] == "agent":
             wk = get("Secret", "claudecode", "im-apps-write-key").get("stringData", {})
             eq("im-apps-write-key keys", sorted(wk), ["identity"])
@@ -490,6 +572,46 @@ def tenant_shape(with_t: dict[str, bytes], without: dict[str, bytes],
     base = docs(without[KS])
     tenant_names = {f"tenant-{t['name']}" for t in tenants} | {"cluster-tenants"}
     rest = [d for d in got if ident(d)[1] not in tenant_names]
+    # A grant's switch is the one non-tenant line it flips. Assert each flip,
+    # then undo it in a copy so the comparison still covers the rest.
+    rest_text = dump_yaml(rest)
+    base_text = dump_yaml(base)
+    for prefix, on in GRANT_SWITCHES:
+        want_pos = "enabled" if any(on(t.get("grants") or {}) for t in tenants) else "disabled"
+        if f"path: {prefix}{want_pos}" not in rest_text:
+            bad.append(f"{KS}: {prefix} switch is not at {want_pos}")
+        rest_text = rest_text.replace(f"path: {prefix}enabled", f"path: {prefix}disabled")
+        if f"path: {prefix}disabled" not in base_text:
+            bad.append(f"{KS}: the tenant-free render has no {prefix} switch at disabled")
+    rest = json.loads(rest_text)
+    # The other non-tenant change (ferry133/jg-base#229): one patch on the
+    # envoy-gateway Kustomization adding `*.<tenant>.${SECRET_DOMAIN}` to the
+    # gateway certificate per tenant, in app_repos order. Asserted exactly,
+    # then removed from the copy like a switch.
+    want_wild = [{"op": "add", "path": "/spec/dnsNames/-",
+                  "value": f"*.{t['name']}.${{SECRET_DOMAIN}}"} for t in tenants]
+    found_wild = 0
+    for d in rest:
+        pats = (d.get("spec") or {}).get("patches")
+        if not isinstance(pats, list):
+            continue
+        keep = []
+        for p in pats:
+            tgt = p.get("target") or {}
+            outer = yq_value(p.get("patch") or "") if tgt.get("name") == "envoy-gateway" else None
+            inner = outer[0].get("value", {}) if isinstance(outer, list) and outer else {}
+            if (inner.get("target") or {}).get("kind") == "Certificate":
+                found_wild += 1
+                got_ops = yq_value(inner.get("patch") or "")
+                if got_ops != want_wild:
+                    bad.append(f"{KS}: certificate dnsNames patch = {got_ops!r}, expected {want_wild!r}")
+                if inner["target"] != {"group": "cert-manager.io", "kind": "Certificate"}:
+                    bad.append(f"{KS}: certificate patch target = {inner['target']!r}")
+                continue
+            keep.append(p)
+        d["spec"]["patches"] = keep
+    if found_wild != 1:
+        bad.append(f"{KS}: {found_wild} certificate dnsNames patches on envoy-gateway, expected 1")
     if rest != base:
         bad.append(f"{KS}: the non-tenant documents differ from the tenant-free render "
                    f"({len(rest)} vs {len(base)} documents)")
@@ -634,12 +756,15 @@ def main() -> int:
                 except RuntimeError as e:
                     failures.append(f"[sample-example] {e}")
                     example = None
-                scenarios = [("with-tenants", TENANTS), ("vendor-only", VENDOR_ONLY)]
+                scenarios = [("with-tenants", TENANTS, {}), ("vendor-only", VENDOR_ONLY, {}),
+                             ("with-l2", TENANTS_L2, L2_EXTRA),
+                             ("with-devices", TENANTS_DEVICES, {})]
                 if example is not None:
-                    scenarios.append(("sample-example", example))
+                    scenarios.append(("sample-example", example, L2_EXTRA))
                 without = None
-                for label, tenants in scenarios:
-                    with_t = dict(copy.deepcopy(fixture), app_repos=copy.deepcopy(tenants))
+                for label, tenants, extra in scenarios:
+                    with_t = dict(copy.deepcopy(fixture), app_repos=copy.deepcopy(tenants),
+                                  **copy.deepcopy(extra))
                     problem = vet(args.tree, with_t, nodes)
                     if problem:
                         what = ("the example operators copy fails cue vet"

@@ -1,0 +1,17 @@
+#% if netdev_enabled %#
+---
+# Applied by Kustomization claude-code-netdev-secrets (ks.yaml), with the
+# cluster key: the Secrets jg-base's im/netdev mounts into the netdev-mcp
+# sidecar (jgct#249; contract in jg-base
+# kubernetes/apps/base/claudecode/claude-code/im/netdev/netdev-mcp.yaml).
+# Rendered only when cluster.yaml records a UniFi console; the write release's
+# two only when all five of its fields are set (plugin.py netdev_config).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - unifi-reader.sops.yaml
+#% if netdev_writer %#
+  - unifi-operator.sops.yaml
+  - im-fac-ticket.sops.yaml
+#% endif %#
+#% endif %#

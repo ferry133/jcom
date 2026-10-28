@@ -22,6 +22,12 @@ spec:
     # `allocateLoadBalancerNodePorts: false` — Cilium's L2 announcement does
     # not need them.
     services.nodeports: "0"
+#% for cls, n in repo.device_quota.items() %#
+    # Devices (jg-base#188), 0 without the grant. jg-base's
+    # tenant-device-requests policy refuses the request on the namespace label;
+    # this refuses it on the count.
+    requests.devic.es/#{ cls }#: "#{ n }#"
+#% endfor %#
 ---
 # Without default requests the quota above rejects every Pod that does not
 # state its own, which reads as the tenant's app being broken.

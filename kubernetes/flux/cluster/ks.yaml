@@ -187,6 +187,34 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: claude-code-im
+    # disabled (empty path, so anything previously applied is pruned): no tenant holds grants.l2: an empty path so Flux prunes the Multus DaemonSet, rather than a suspend that would leave it on every node
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: multus
+          namespace: flux-system
+        spec:
+          suspend: false
+          path: ./kubernetes/apps/base/kube-system/multus/disabled
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: multus
+    # disabled (empty path, so anything previously applied is pruned): no tenant holds grants.devices: an empty path so Flux prunes the device plugin, rather than a suspend that would leave it advertising
+    - patch: |-
+        apiVersion: kustomize.toolkit.fluxcd.io/v1
+        kind: Kustomization
+        metadata:
+          name: generic-device-plugin
+          namespace: flux-system
+        spec:
+          suspend: false
+          path: ./kubernetes/apps/base/kube-system/generic-device-plugin/disabled
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: generic-device-plugin
     # enabled: explicit-memory PostgreSQL from jg-base, one per default im, always on since 2026-09-06
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1

@@ -166,6 +166,32 @@ KNOWN: dict[str, tuple[str, str, str, str]] = {
         "Graceful reboot or shutdown of any node of this cluster from anywhere on its LAN, for a year. No data read beyond what the os:reader credential already gives",
         "⚠️ Omni cannot revoke it: deleting the value, the file or the pod leaves it live. `fleet-ops talos-operator-credential rotate` — `omnictl cluster -n <cluster> secret rotate talos-ca`, prove the old one is rejected, re-mint, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop. Expiry (one year) is read from the certificate by the sidecar and by `verify`, not recorded here",
     ),
+    # ── netdev-mcp (jgct#249, jg-base#222): rendered into Secrets under
+    # kubernetes/netdev/, mounted on the sidecar only.
+    "unifi_reader_key": (
+        "The netdev-mcp sidecar's read-only UniFi Integration API key (Secret unifi-reader)",
+        "This site's UniFi console, read-only",
+        "The site's network inventory: devices, clients and their addresses, networks and Wi-Fi settings as the Integration API exposes them",
+        "Revoke and reissue in the console's Integration settings, put it in cluster.yaml, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop",
+    ),
+    "unifi_operator_password": (
+        "With unifi_operator_user: the restricted local admin the netdev-mcp writer signs in as (Secret unifi-operator)",
+        "This site's UniFi console, at whatever that local account's role allows",
+        "Change the site's network -- VLANs, firewall, Wi-Fi -- as that account, without the sidecar's confirm/ticket/snapshot gates",
+        "Change the password on the console (or delete the account), put the new one in cluster.yaml, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop",
+    ),
+    "im_fac_ticket_token": (
+        "The token the netdev-mcp writer files its change tickets with (Secret im-fac-ticket)",
+        "im_fac_ticket_repo only, issues only -- check the token, not this row",
+        "Open, comment on and close issues in that repo: forge or bury the record of a change",
+        "Revoke and reissue in GitHub (fine-grained, that one repo, Issues read/write), put it in cluster.yaml, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop",
+    ),
+    "ha_im_token": (
+        "The base im's long-lived Home Assistant token, for the ha_app tenant's MCP endpoint (Secret ha-im-token, jgct#237)",
+        "That Home Assistant, as its `im` user -- a non-admin user, but MCP exposes whatever entities HA exposes to the assistant",
+        "Read and control the exposed devices of the customer's home or site: locks, alarms, cameras, climate",
+        "Revoke the token in HA (the `im` user's profile, Long-lived access tokens) and mint a new one with fleet-ops `ha-im-credential`, `task configure --yes`, commit, push; then `escrow-refresh` -- cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop. The mount is a directory, so im reads the new token without a restart",
+    ),
     # ── classified 2026-09-26 (`FO-runbook [5fe39a]`). Consumers were MEASURED by
     # grepping jg-base `origin/main` for each rendered variable — two of them have
     # none, and that is recorded rather than smoothed over. Where a third-party
@@ -334,6 +360,8 @@ NOT_CREDENTIALS = {
     "daily_check_notify_email_from", "backup_r2_endpoint", "backup_r2_bucket",
     "backup_retain_days", "claudecode_allowed_emails", "claudecode_auth0",
     "claudecode_oauth2_cookie_secret_source",
+    # The console's certificate or CA (PEM): public, travels with the reader key.
+    "unifi_ca_cert",
 }
 
 # Name-shaped sweep used ONLY to find fields the table above does not know

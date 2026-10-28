@@ -1,0 +1,42 @@
+#% if app_repos | selectattr('grants.l2') | list %#
+#|   One NetworkAttachmentDefinition per address in each `grants.l2` tenant's
+     `l2_network` range (plugin.py `_tenant_l2`), in the tenant's first
+     namespace. A pod asks for one by name:
+
+         k8s.v1.cni.cncf.io/networks: lan-10-9-9-19
+
+     macvlan in bridge mode on the node NIC, static IPAM. No `gateway`: the
+     pod's default route stays on eth0 (Cilium), so network policy still
+     governs everything except net1. `routes` sends replies to the LAN's other
+     subnets back out through net1 (jgct#240) -- without them a client on
+     another subnet reaches the pod and never hears back.
+
+     `sbr` after macvlan (jgct#244) moves all of net1's routes into a table
+     used only for traffic sourced from the pod's LAN address. Without it the
+     subnet route sat in the main table, the kubelet's probe replies to the
+     node went out net1, and a macvlan child cannot reach its own parent: every
+     network probe failed. The cost: connections the pod opens itself leave via
+     eth0 (SNAT to the node) unless it binds the LAN address as source. Needs
+     jg-base's multus to install `sbr` (ferry133/jg-base#228).
+
+     Platform-owned: tenant-admin has no verbs on k8s.cni.cncf.io, so the
+     tenant can use these and change none of them.
+
+     The kind is served by jg-base's multus Kustomization, which this render
+     switches on in the same commit (flux/cluster/ks.yaml). On the first
+     apply cluster-tenants can fail its dry-run once with "no matches for
+     kind NetworkAttachmentDefinition" until Multus has installed the CRD; it
+     heals on the next retry (measured on jg-jcc2, 2026-10-26). #|
+#% for repo in app_repos if repo.grants.l2 %#
+#% for nad in repo.l2_nads %#
+---
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: #{ nad.name }#
+  namespace: #{ repo.namespaces[0] }#
+spec:
+  config: '#{ nad.config }#'
+#% endfor %#
+#% endfor %#
+#% endif %#

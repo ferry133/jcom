@@ -1,0 +1,16 @@
+#% if ha_mcp_url %#
+---
+#| jgct#237, jg-base#221/#232: Secret `ha-im-token` in `claudecode`, key
+   `token`. jg-base mounts the whole Secret at /etc/ha-mcp on im's app
+   container (optional, 0400) and sets HA_MCP_TOKEN_FILE=/etc/ha-mcp/token.
+   Applied by Kustomization claude-code-ha-mcp-secret (ks.yaml). It used to
+   live under cluster-tenants, but the default/home-assistant extra pairs with
+   it too, and an extra-only cluster renders no tenants directory. #|
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ha-im-token
+  namespace: claudecode
+stringData:
+  token: #{ ha_im_token | trim | tojson }#
+#% endif %#

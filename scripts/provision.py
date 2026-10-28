@@ -502,36 +502,29 @@ def template_cluster_name(path: str) -> tuple[str | None, str]:
 
 
 LOCAL_PATH_DIR = "/var/local-path-provisioner"
-LOCAL_PATH_MOUNT_PATCH = f"""  patches:
-    - idOverride: 400-<cluster>-kubelet-local-path
-      inline: |
-        machine:
-          kubelet:
-            extraMounts:
-              - destination: {LOCAL_PATH_DIR}
-                type: bind
-                source: {LOCAL_PATH_DIR}
-                options: [bind, rshared, rw]"""
+# Both patches below are list items at the indent of the runbook's
+# `patches:` list (a top-level key, items at two spaces): pasted as printed,
+# the template must still pass `omnictl cluster template validate` (jgct#239
+# review — the first version was indented two more and failed it at rc 1).
+LOCAL_PATH_MOUNT_PATCH = f"""  - idOverride: 400-<cluster>-kubelet-local-path
+    inline: |
+      machine:
+        kubelet:
+          extraMounts:
+            - destination: {LOCAL_PATH_DIR}
+              type: bind
+              source: {LOCAL_PATH_DIR}
+              options: [bind, rshared, rw]"""
 
 
-def template_local_path_mount(path: str) -> tuple[bool | None, str]:
-    """Does the Omni template at `path` bind LOCAL_PATH_DIR into kubelet?
+def _template_bodies(path: str) -> tuple[dict[str, list[str]] | None, str]:
+    """The Omni template at `path`, as each document's text grouped by `kind`.
 
-    jg-base#150 / jgct#207: kubelet runs in its own container on Talos and
-    resolves a volumeMount's `subPath` there. Without this bind, a local-path
-    PVC's subPath lands on kubelet's own rootfs and is lost on every kubelet
-    restart, silently (measured on jcom; red-then-green on an Omni throwaway,
-    fleet-ops `56abf48`). The talhelper path carries the bind in
-    `templates/config/talos/patches/global/machine-kubelet.yaml.j2` (jgct#206);
-    the Omni path applies none of those patches, and its template is written
-    by hand (runbook Step 3b) — so this is the only place the repo can see it.
-
-    Returns (True, "") / (False, why) / (None, why it could not be read).
-    Satisfied by the `kind: Cluster` document, or by EVERY `ControlPlane` and
-    `Workers` document; a `Machine`-level patch covers one machine and does not
-    count. Patches given as `file:` are read relative to the template. Comment
-    lines are ignored, so a commented-out patch does not pass. Read as text,
-    with the standard library, for the reason `template_cluster_name` gives.
+    Comment lines are dropped, so a commented-out patch is not there. Patches
+    given as `file:` are read relative to the template and appended to the
+    document that names them. Read as text, with the standard library, for the
+    reason `template_cluster_name` gives. Returns (bodies, "") or (None, why
+    it could not be read).
     """
     try:
         text = open(path).read()
@@ -548,7 +541,7 @@ def template_local_path_mount(path: str) -> tuple[bool | None, str]:
         else:
             docs[-1].append(line)
 
-    by_kind: dict[str, list[bool]] = {}
+    by_kind: dict[str, list[str]] = {}
     for doc in docs:
         kind = ""
         body: list[str] = []
@@ -567,21 +560,133 @@ def template_local_path_mount(path: str) -> tuple[bool | None, str]:
                                 if not l.lstrip().startswith("#"))
                 except OSError as e:
                     return None, f"{path}: patch file {f.group(1)} cannot be read: {e}"
-        joined = "\n".join(body)
-        has = "extraMounts" in joined and LOCAL_PATH_DIR in joined
-        by_kind.setdefault(kind, []).append(has)
+        by_kind.setdefault(kind, []).append("\n".join(body))
+    return by_kind, ""
 
-    if any(by_kind.get("Cluster", [])):
-        return True, ""
+
+def _on_every_machine(by_kind: dict[str, list[str]], has) -> bool:
+    """`has` holds for the Cluster document, or for EVERY ControlPlane and
+    Workers document. A `Machine`-level patch covers one machine and does not
+    count."""
+    if any(has(b) for b in by_kind.get("Cluster", [])):
+        return True
     cp, workers = by_kind.get("ControlPlane", []), by_kind.get("Workers", [])
-    if cp and all(cp) and all(workers):
+    return bool(cp) and all(has(b) for b in cp) and all(has(b) for b in workers)
+
+
+def template_local_path_mount(path: str) -> tuple[bool | None, str]:
+    """Does the Omni template at `path` bind LOCAL_PATH_DIR into kubelet?
+
+    jg-base#150 / jgct#207: kubelet runs in its own container on Talos and
+    resolves a volumeMount's `subPath` there. Without this bind, a local-path
+    PVC's subPath lands on kubelet's own rootfs and is lost on every kubelet
+    restart, silently (measured on jcom; red-then-green on an Omni throwaway,
+    fleet-ops `56abf48`). The talhelper path carries the bind in
+    `templates/config/talos/patches/global/machine-kubelet.yaml.j2` (jgct#206);
+    the Omni path applies none of those patches, and its template is written
+    by hand (runbook Step 3b) — so this is the only place the repo can see it.
+
+    Returns (True, "") / (False, why) / (None, why it could not be read).
+    Where it must be, and how the file is read: `_on_every_machine`,
+    `_template_bodies`.
+    """
+    by_kind, why = _template_bodies(path)
+    if by_kind is None:
+        return None, why
+    if _on_every_machine(by_kind, lambda b: "extraMounts" in b and LOCAL_PATH_DIR in b):
         return True, ""
     return False, (f"{path} does not bind {LOCAL_PATH_DIR} into kubelet "
                    f"(no `extraMounts` for it on the Cluster, nor on every "
                    f"ControlPlane/Workers set). A local-path PVC mounted by "
                    f"subPath — im's keyrings — would land on kubelet's own "
-                   f"rootfs (jg-base#150, jgct#207). Add to the `kind: Cluster` "
-                   f"document:\n{LOCAL_PATH_MOUNT_PATCH}")
+                   f"rootfs (jg-base#150, jgct#207). Add to the `patches:` list of "
+                   f"the `kind: Cluster` document:\n{LOCAL_PATH_MOUNT_PATCH}")
+
+
+# The talhelper path's containerd customization. It is the single source: the
+# Omni check below reads the required lines out of it, so a key added there is
+# required here without anyone editing this file.
+CRI_CUSTOMIZATION_SOURCE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), os.pardir,
+    "templates", "config", "talos", "patches", "global", "machine-files.yaml.j2")
+CRI_CUSTOMIZATION_PATH = "/etc/cri/conf.d/20-customization.part"
+
+
+def cri_customization(source: str = CRI_CUSTOMIZATION_SOURCE) -> tuple[list[str] | None, str, str]:
+    """(required lines, patch to paste, "") read from the talhelper patch, or
+    (None, "", why it could not be read).
+
+    The required lines are the `content: |` block of the file entry whose path
+    is CRI_CUSTOMIZATION_PATH, stripped: every TOML table header and key the
+    talhelper path puts on the node.
+    """
+    try:
+        text = open(source).read()
+    except OSError as e:
+        return None, "", f"cannot read the CRI customization source {source}: {e}"
+    lines = text.splitlines()
+    at = next((i for i, l in enumerate(lines)
+               if l.strip() == f"path: {CRI_CUSTOMIZATION_PATH}"), None)
+    if at is None:
+        return None, "", f"{source} has no file entry with path {CRI_CUSTOMIZATION_PATH}"
+    content = next((i for i in range(at + 1, len(lines))
+                    if lines[i].strip() == "content: |"), None)
+    if content is None:
+        return None, "", f"{source}: the {CRI_CUSTOMIZATION_PATH} entry has no `content: |` block"
+    indent = len(lines[content]) - len(lines[content].lstrip())
+    block = []
+    for l in lines[content + 1:]:
+        if l.strip() and len(l) - len(l.lstrip()) <= indent:
+            break
+        block.append(l)
+    required = [l.strip() for l in block if l.strip()]
+    if not required:
+        return None, "", f"{source}: the {CRI_CUSTOMIZATION_PATH} content block is empty"
+    patch = ("  - idOverride: 400-<cluster>-cri-customization\n"
+             "    inline: |\n"
+             + "\n".join("      " + l for l in lines if l.strip()))
+    return required, patch, ""
+
+
+def template_cri_customization(path: str, source: str = CRI_CUSTOMIZATION_SOURCE) -> tuple[bool | None, str]:
+    """Does the Omni template at `path` carry the talhelper path's containerd
+    customization — every line of it?
+
+    jgct#238 (jg-base#188): the talhelper path writes CRI_CUSTOMIZATION_PATH
+    from `machine-files.yaml.j2`; the Omni path applies none of those patches,
+    so an Omni cluster gets neither key. Measured: jg-jiahd's part file is
+    0 bytes and `device_ownership_from_security_context` is absent, so a
+    non-root pod cannot open a device the device plugin hands it; an Omni
+    throwaway (jg-jcc2) with the same content as a Cluster patch got it on
+    `cri.toml:19`, the same line as jcom. The other key,
+    `discard_unpacked_layers = false`, is what spegel needs to serve layers.
+
+    Each required line must appear, stripped, as a line of the same document,
+    so dropping one key — or its table header — fails. Returns (True, "") /
+    (False, why) / (None, why it could not be read).
+    """
+    required, patch, why = cri_customization(source)
+    if required is None:
+        return None, why
+    by_kind, why = _template_bodies(path)
+    if by_kind is None:
+        return None, why
+
+    def has(body: str) -> bool:
+        have = {l.strip() for l in body.splitlines()}
+        return CRI_CUSTOMIZATION_PATH in body and all(r in have for r in required)
+
+    if _on_every_machine(by_kind, has):
+        return True, ""
+    return False, (f"{path} does not write the containerd customization "
+                   f"{CRI_CUSTOMIZATION_PATH} with every line of "
+                   f"{os.path.relpath(source)} (on the Cluster, or on every "
+                   f"ControlPlane/Workers set). Without "
+                   f"`device_ownership_from_security_context` a non-root pod "
+                   f"cannot open a device it was granted (jg-base#188); without "
+                   f"`discard_unpacked_layers = false` spegel cannot serve "
+                   f"layers (jgct#238). Add to the `patches:` list of the `kind: Cluster` "
+                   f"document:\n{patch}")
 
 
 class OmniClusterStep(Step):
@@ -782,8 +887,12 @@ class OmniClusterStep(Step):
         return [ctx["omni_template"]]
 
     def input_problems(self, ctx: dict) -> list[str]:
-        ok_, why = template_local_path_mount(ctx["omni_template"])
-        return [] if ok_ else [why]
+        found = []
+        for check in (template_local_path_mount, template_cri_customization):
+            ok_, why = check(ctx["omni_template"])
+            if not ok_:
+                found.append(why)
+        return found
 
     def create(self, ctx: dict) -> list[list[str]]:
         return [["omnictl", "cluster", "template", "sync", "-f", ctx["omni_template"]]]

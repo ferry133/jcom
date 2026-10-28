@@ -20,6 +20,22 @@ metadata:
     # Read by jg-base's tenant LoadBalancer admission policy (design D9 (B)).
     jg.tenant-lan-ip: granted
 #% endif %#
+#% if repo.grants.devices %#
+    # Read by jg-base's tenant-device-requests admission policy (#188). Every
+    # namespace: the quota beside it bounds how many devices each may take.
+    jg.tenant-devices: granted
+#% endif %#
+#% if repo.grants.l2 and ns == repo.namespaces[0] %#
+    # Read by jg-base's tenant-l2-networks admission policy (#187). Only the
+    # first namespace: the NADs live there (l2-networks.yaml), and the policy
+    # refuses a pod that names a NAD outside its own namespace.
+    jg.tenant-l2: granted
+#% endif %#
+#% if repo.grants.public %#
+    # Read by jg-base's tenant HTTPRoute admission policy (#235): without it a
+    # route may attach to envoy-internal only. Every namespace.
+    jg.tenant-public: granted
+#% endif %#
 #% endfor %#
 #% endfor %#
 #% endif %#

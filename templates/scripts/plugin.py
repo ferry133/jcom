@@ -46,7 +46,9 @@ def b64encode(value: str) -> str:
 # names after. Recorded in one line rather than deleted silently, because the
 # next person adding a position will look for precedent on how one leaves.
 EMPTY_POSITIONS = frozenset({'disabled'})
-LIVE_POSITIONS = frozenset({'enabled', 'app'})
+# 'netdev' (jgct#249): claude-code-im's third position, jg-base's im/netdev
+# overlay -- im/enabled plus the netdev-mcp sidecar, so it renders resources.
+LIVE_POSITIONS = frozenset({'enabled', 'app', 'netdev'})
 
 DISABLED_LABEL = 'disabled (empty path, so anything previously applied is pruned)'
 
@@ -225,6 +227,150 @@ def extras_deploy_key(file_path: str = 'jg-extras.deploy.key') -> str:
     return text
 
 
+# The im/netdev position of claude-code-im (jgct#249, the jgct half of
+# ferry133/jg-base#222): im plus the netdev-mcp sidecar, which reads this
+# cluster's UniFi console. jg-base's contract is in
+# kubernetes/apps/base/claudecode/claude-code/im/netdev/netdev-mcp.yaml: three
+# optional Secrets in `claudecode` (unifi-reader: ca.crt + reader-key;
+# unifi-operator: operator, two lines; im-fac-ticket: token) and four
+# cluster-secrets values.
+#
+# Two groups, and each is all-or-nothing:
+#   reader  unifi_controller_url + unifi_ca_cert + unifi_reader_key
+#   writer  unifi_operator_user + unifi_operator_password +
+#           im_fac_ticket_repo + im_fac_ticket_token + netdev_outside_probes
+# The server registers write tools only when every writer input is usable, so
+# a half-set writer is safe on the cluster -- but it renders a cluster.yaml
+# that reads as "operator on" while the tools are absent, and the startup line
+# that would say why is in a pod log nobody reads at render time. So a half-set
+# is refused here, before any file is written, naming the missing FIELDS and
+# never a value.
+#
+# The recorded console is what selects the path: no separate on/off switch,
+# because two fields for one fact diverge (base_repo_dir's reasoning).
+NETDEV_READER = ('unifi_controller_url', 'unifi_ca_cert', 'unifi_reader_key')
+NETDEV_WRITER = ('unifi_operator_user', 'unifi_operator_password',
+                 'im_fac_ticket_repo', 'im_fac_ticket_token',
+                 'netdev_outside_probes')
+
+
+def netdev_config(data: dict) -> None:
+    def present(f):
+        return bool(data.get(f))
+
+    reader = [f for f in NETDEV_READER if present(f)]
+    writer = [f for f in NETDEV_WRITER if present(f)]
+    data['netdev_enabled'] = bool(reader)
+    data['netdev_writer'] = bool(writer)
+    if not reader and not writer:
+        return
+    if writer and not reader:
+        raise KeyError(
+            f"cluster.yaml sets {', '.join(writer)} but no UniFi console "
+            f"({', '.join(NETDEV_READER)}). The write release is an addition to "
+            "the reader, not a substitute for it -- record the console first.")
+    if len(reader) != len(NETDEV_READER):
+        missing = [f for f in NETDEV_READER if f not in reader]
+        raise KeyError(
+            f"cluster.yaml records a UniFi console but is missing "
+            f"{', '.join(missing)}. All three are needed for the netdev-mcp "
+            "reader: the URL, the console's certificate (or its CA) as PEM, "
+            "and the Integration API key.")
+    if writer and len(writer) != len(NETDEV_WRITER):
+        missing = [f for f in NETDEV_WRITER if f not in writer]
+        raise KeyError(
+            f"cluster.yaml sets part of the netdev-mcp write release "
+            f"({', '.join(writer)}) and is missing {', '.join(missing)}. "
+            "Set all five, or none for a reader-only cluster. A half-set "
+            "renders a cluster that reads as 'operator on' while the server "
+            "registers no write tool.")
+    if not data['claudecode_auth0_enabled']:
+        # im/disabled has no im for the sidecar to join. Ignoring the console
+        # would be a field that renders nothing and says nothing.
+        raise KeyError(
+            "cluster.yaml records a UniFi console but claudecode_auth0 is "
+            "false, so the base im is on its empty im/disabled path and there "
+            "is no pod for the netdev-mcp sidecar to run in. Remove the unifi_* "
+            "fields, or turn the base im on.")
+    # Shapes the server would refuse, caught here. Messages name the field and
+    # what is wrong with it, never the value: several of these are credentials.
+    if '-----BEGIN CERTIFICATE-----' not in data['unifi_ca_cert']:
+        raise ValueError(
+            "unifi_ca_cert has no '-----BEGIN CERTIFICATE-----' line: it must "
+            "be the console's certificate or its CA, as PEM.")
+    single = ['unifi_reader_key']
+    if writer:
+        single += ['unifi_operator_user', 'unifi_operator_password',
+                   'im_fac_ticket_token']
+    multi = [f for f in single if '\n' in str(data[f]).strip()]
+    if multi:
+        raise ValueError(
+            f"{', '.join(multi)} span more than one line; each is a single "
+            "value. (unifi-operator's file is user and password on two lines, "
+            "and the template builds it from the two fields.)")
+    if writer:
+        probes = data['netdev_outside_probes']
+        if len(probes) != 3 or len(set(probes)) != 3:
+            raise ValueError(
+                "netdev_outside_probes must name exactly three DIFFERENT "
+                f"targets (got {len(probes)}, {len(set(probes))} distinct): the "
+                "server checks outside reachability on three paths before "
+                "and after a write.")
+
+
+# The base im's Home Assistant MCP connection (jgct#237, fleet-ops
+# im-home-automation; jg-base#221/#232). jg-base reads two things: HA_MCP_URL
+# from cluster-secrets (empty = unset, nothing registered) and Secret
+# `ha-im-token` (key `token`) in claudecode, mounted optional on the app
+# container.
+#
+# The URL is derived, never typed: under ferry133's ruling on jgct#245 (A) im
+# reaches a tenant's API only through the tenant's own HTTPRoute, so it is
+# https://<ha_app>.<tenant>.<domain>/api/mcp -- the hostname the tenant
+# hostname policy admits and the gateway certificate covers (jg-base#229).
+# `ha_app` on the app_repos entry names the HA app's label; it is the one fact
+# the template cannot see, because the vendor writes the HTTPRoute.
+#
+# Rendered only with ha_im_token. The token is minted inside HA after HA runs
+# (fleet-ops skill `ha-im-credential`), so the first render of a cluster with
+# an HA tenant has none, and the URL stays empty until it does -- the order
+# "deploy HA, then mint the token" is the only one that works, and it must not
+# be refused (the claim on jgct#237).
+#
+# The jg-extras HA extra gets no URL: it has no tenant HTTPRoute, and whether
+# it gets a public route or none is not ruled yet (k8scc-c7 on jgct#237,
+# 2026-10-26 20:04). A token with only the extra is therefore refused rather
+# than rendered into a Secret nothing would read.
+def ha_mcp_config(data: dict) -> None:
+    ha = [r for r in (data.get('app_repos') or []) if r.get('ha_app')]
+    data['ha_mcp_url'] = ''
+    token = data.get('ha_im_token')
+    if not token:
+        return
+    if '\n' in str(token).strip():
+        raise ValueError("ha_im_token spans more than one line; it is a single "
+                         "long-lived access token.")
+    # The default/home-assistant extra (jg-extras) serves HTTPRoute
+    # `ha.${SECRET_DOMAIN}` on envoy-internal, the same gateway a tenant's
+    # route uses; ferry133 ruled 2026-10-27 that it gets MCP too (jgct#237).
+    extra = 'default/home-assistant' in (data.get('extras') or [])
+    if not ha and not extra:
+        raise KeyError(
+            "ha_im_token is set but neither an app_repos entry declares ha_app "
+            "nor is the default/home-assistant extra listed, so there is no Home "
+            "Assistant URL for im to use the token against. Declare ha_app on "
+            "the tenant that runs HA, list the extra, or remove the token.")
+    if len(ha) + extra > 1:
+        raise KeyError(
+            "im takes one Home Assistant, and this cluster has "
+            + ", ".join([f"app_repos entry {r['name']} (ha_app)" for r in ha]
+                        + (["the default/home-assistant extra"] if extra else []))
+            + ". Keep exactly one of them.")
+    data['ha_mcp_url'] = (f"https://{ha[0]['ha_app']}.{ha[0]['name']}."
+                          f"{data['cloudflare_domain']}/api/mcp" if ha else
+                          f"https://ha.{data['cloudflare_domain']}/api/mcp")
+
+
 # Return the Flux / GitHub push token from github-push-token.txt
 def github_push_token(file_path: str = 'github-push-token.txt') -> str:
     try:
@@ -348,15 +494,150 @@ DEFAULT_CLAUDE_INSTANCES = []
 # ResourceQuota verbatim.
 APP_REPO_QUOTA_DEFAULTS = {'cpu': '4', 'memory': '8Gi', 'pods': 50}
 
-# Grants the schema accepts but no platform component serves yet. Refused here
-# rather than in cluster.schema.cue so the refusal can say what is missing; a
-# schema rejection would read as a typo.
-APP_REPO_UNSERVED_GRANTS = {
-    'l2': "an L2 discovery component (mDNS reflector or Multus+macvlan) — "
-          "ferry133/jg-base#187 (fleet-ops root `standalone-app-repos` task 8.1)",
-    'devices': "a device plugin exposing /dev/* as extended resources — "
-               "ferry133/jg-base#188 (fleet-ops root `standalone-app-repos` task 8.2)",
-}
+# `grants.devices` (ferry133/jg-base#188): the device classes jg-base's
+# generic-device-plugin advertises, each as the extended resource
+# `devic.es/<class>` (kube-system/generic-device-plugin/enabled/daemonset.yaml,
+# its `--device` args). A class named here that jg-base does not ship would
+# render a quota for a resource no node ever has: the pod stays Pending with
+# nothing saying why. Refused here, not in the schema, so the refusal can list
+# what exists.
+DEVICE_CLASSES = ('serial',)
+
+
+# `grants.l2` (ferry133/jg-base#187, jgct#240). jg-base ships Multus + macvlan
+# behind the `multus` switch and admits a pod's secondary network only in a
+# namespace labelled `jg.tenant-l2: granted`, naming a NAD in its own namespace.
+# This renders those NADs: one per address in the tenant's `l2_network` range,
+# static IPAM, because host-local IPAM keeps its allocations per NODE and two
+# nodes would hand out the same LAN address. One NAD per address makes the
+# address the thing a pod asks for, so a collision is two pods naming the same
+# NAD rather than two allocators disagreeing.
+#
+# Capped: every address is an object in the tenant namespace, and a range wide
+# enough to need more is a different design (a cluster-wide allocator).
+L2_MAX_ADDRESSES = 16
+# lan-address-probe scans this window of the node's /24, from the top, for the
+# appliance's LoadBalancer addresses (jg-base network/lan-address/app,
+# SCAN_FROM / SCAN_TO, not overridden anywhere). An l2 address inside it is one
+# the probe can take for envoy whenever the tenant pod happens to be down.
+L2_APPLIANCE_PROBE_WINDOW = (200, 254)
+
+
+def _l2_nad_name(addr: Any) -> str:
+    return 'lan-' + str(addr).replace('.', '-')
+
+
+def _tenant_l2(data: dict[str, Any], repo: dict[str, Any], pool: list,
+               pool_text: str, claimed: list) -> None:
+    """Refuse an `l2_network` that would collide with something on the LAN the
+    render can see, and fill `repo['l2_nads']` for the template."""
+    name = repo['name']
+    l2 = repo.get('l2_network')
+    if l2 is None:
+        raise KeyError(
+            f"app_repos[{name}].grants.l2 is set without l2_network. The pod's "
+            f"LAN address comes from that range; there is no default for an "
+            f"address on someone else's LAN.")
+    start = ipaddress.ip_address(l2['start'])
+    stop = ipaddress.ip_address(l2['stop'])
+    span = f"{start}-{stop}"
+    if stop < start:
+        raise KeyError(f"app_repos[{name}].l2_network {span}: stop is below start.")
+    size = int(stop) - int(start) + 1
+    if size > L2_MAX_ADDRESSES:
+        raise KeyError(
+            f"app_repos[{name}].l2_network {span} holds {size} addresses; at most "
+            f"{L2_MAX_ADDRESSES} (one NetworkAttachmentDefinition each).")
+    node_net = ipaddress.ip_network(str(data.get('node_cidr')), strict=False)
+    if start not in node_net or stop not in node_net:
+        raise KeyError(
+            f"app_repos[{name}].l2_network {span} is not inside node_cidr "
+            f"{node_net}. macvlan puts the pod on the node's own LAN segment.")
+    if start in (node_net.network_address, node_net.broadcast_address) or \
+            stop in (node_net.network_address, node_net.broadcast_address):
+        raise KeyError(
+            f"app_repos[{name}].l2_network {span} includes the network or "
+            f"broadcast address of {node_net}.")
+    gw = ipaddress.ip_address(data['node_default_gateway'])
+    if start <= gw <= stop:
+        raise KeyError(
+            f"app_repos[{name}].l2_network {span} includes node_default_gateway {gw}.")
+    for node in data.get('nodes') or []:
+        addr = ipaddress.ip_address(node['address'])
+        if start <= addr <= stop:
+            raise KeyError(
+                f"app_repos[{name}].l2_network {span} includes node "
+                f"{node.get('name', addr)} ({addr}).")
+    if data.get('deployment_profile') == 'appliance':
+        lo, hi = L2_APPLIANCE_PROBE_WINDOW
+        prefix = int(start) & ~0xFF
+        window = (ipaddress.ip_address(prefix + lo), ipaddress.ip_address(prefix + hi))
+        if start <= window[1] and window[0] <= stop:
+            raise KeyError(
+                f"app_repos[{name}].l2_network {span} overlaps {window[0]}-{window[1]}, "
+                f"where lan-address-probe looks for this appliance's LoadBalancer "
+                f"addresses. It would take an l2 address whenever the tenant pod "
+                f"is down. Choose addresses below .{lo}.")
+    for lo, hi in pool:
+        if start <= hi and lo <= stop:
+            raise KeyError(
+                f"app_repos[{name}].l2_network {span} overlaps lb_pool_blocks "
+                f"({pool_text}). Cilium would announce the same address the pod "
+                f"answers ARP for.")
+    for lo, hi, other in claimed:
+        if start <= hi and lo <= stop:
+            raise KeyError(
+                f"app_repos[{name}].l2_network {span} overlaps {other} {lo}-{hi}.")
+    claimed.append((start, stop, f"app_repos[{name}].l2_network"))
+    repo['l2_nads'] = [
+        {'name': _l2_nad_name(ipaddress.ip_address(int(start) + i)),
+         'address': f"{ipaddress.ip_address(int(start) + i)}/{node_net.prefixlen}"}
+        for i in range(size)]
+
+
+def lan_routed_cidrs(data: dict[str, Any]) -> list[str]:
+    """The customer LAN's OTHER subnets, which every tenant NAD routes back to
+    through node_default_gateway (jgct#240, ferry133 chose explicit routes).
+
+    Without them a client on another subnet reaches the pod and never gets an
+    answer: the reply leaves through the pod's default route on eth0 (Cilium),
+    not through net1. Measured on jg-jcc2 2026-10-26 (jg-base#187
+    issuecomment-6404527846; the route fixed it, jgct#240
+    issuecomment-6404752339).
+
+    Required, with no default, as soon as any tenant holds grants.l2: whether a
+    subnet was left out depends on the router's tables, which nothing in the
+    render or the cluster can read. An explicit `[]` is the way to say "this
+    LAN has one subnet", so the omission is always a decision someone wrote.
+    """
+    if 'lan_routed_cidrs' not in data:
+        raise KeyError(
+            "lan_routed_cidrs is not set, and an app_repos entry holds grants.l2. "
+            "List every other subnet the customer's router connects to this LAN "
+            "(for example a separate Wi-Fi or office segment), or [] if there is "
+            "none. A subnet left out cannot reach the tenant's pods, and nothing "
+            "reports it.")
+    node_net = ipaddress.ip_network(str(data.get('node_cidr')), strict=False)
+    gw = ipaddress.ip_address(data['node_default_gateway'])
+    if gw not in node_net:
+        raise KeyError(
+            f"node_default_gateway {gw} is outside node_cidr {node_net}; the "
+            f"tenant NAD routes through it from the node's segment.")
+    seen: list[Any] = []
+    for cidr in data['lan_routed_cidrs']:
+        try:
+            net = ipaddress.ip_network(cidr, strict=True)
+        except ValueError as e:
+            raise KeyError(f"lan_routed_cidrs entry {cidr!r}: {e}.") from None
+        if net.overlaps(node_net):
+            raise KeyError(
+                f"lan_routed_cidrs entry {net} overlaps node_cidr {node_net}; the "
+                f"node's own segment is reached directly, not through a route.")
+        for other in seen:
+            if net.overlaps(other):
+                raise KeyError(f"lan_routed_cidrs entries {other} and {net} overlap.")
+        seen.append(net)
+    return [str(n) for n in seen]
 
 
 def _block_range(block: dict[str, str]) -> tuple[Any, Any]:
@@ -392,12 +673,18 @@ def app_repos(data: dict[str, Any]) -> list[dict[str, Any]]:
         grants = repo.setdefault('grants', {})
         grants.setdefault('lan_ip', 0)
 
-        for grant, component in APP_REPO_UNSERVED_GRANTS.items():
-            if grants.get(grant):
-                raise KeyError(
-                    f"app_repos[{name}].grants.{grant} is set, but the platform "
-                    f"does not ship {component} yet. Remove the grant; a tenant "
-                    f"that relied on it would deploy and then not work.")
+        devices = grants.setdefault('devices', {})
+        unknown = sorted(set(devices) - set(DEVICE_CLASSES))
+        if unknown:
+            raise KeyError(
+                f"app_repos[{name}].grants.devices names {', '.join(unknown)}, which "
+                f"jg-base's device plugin does not advertise (it has: "
+                f"{', '.join(DEVICE_CLASSES)}). A quota for it would admit a pod "
+                f"no node can ever run.")
+        # Every class gets a quota line, 0 where not granted: a second fence
+        # behind jg-base's tenant-device-requests policy, on a different
+        # premise (the quota counts resources; the policy reads a label).
+        repo['device_quota'] = {c: devices.get(c, 0) for c in DEVICE_CLASSES}
 
         # The level is a consequence of the grants, never an input (design
         # D9): the schema has no field for it, so nothing in cluster.yaml can
@@ -408,6 +695,13 @@ def app_repos(data: dict[str, Any]) -> list[dict[str, Any]]:
             repo['psa_level'] = 'baseline'
         else:
             repo['psa_level'] = 'restricted'
+
+        if grants.get('l2'):
+            _tenant_l2(data, repo, pool, pool_text, claimed)
+        elif 'l2_network' in repo:
+            raise KeyError(
+                f"app_repos[{name}].l2_network is set but grants.l2 is not. "
+                f"Nothing would render from it.")
 
         if not grants['lan_ip']:
             continue
@@ -451,8 +745,33 @@ def app_repos(data: dict[str, Any]) -> list[dict[str, Any]]:
             if start <= hi and lo <= stop:
                 raise KeyError(
                     f"app_repos[{name}].lan_ip_range {start}-{stop} overlaps "
-                    f"app_repos[{other}].lan_ip_range {lo}-{hi}.")
-        claimed.append((start, stop, name))
+                    f"{other} {lo}-{hi}.")
+        claimed.append((start, stop, f"app_repos[{name}].lan_ip_range"))
+    if any(r['grants'].get('l2') for r in repos):
+        data['lan_routed_cidrs'] = lan_routed_cidrs(data)
+        routes = [{'dst': c, 'gw': data['node_default_gateway']}
+                  for c in data['lan_routed_cidrs']]
+        # The CNI config is a JSON string inside YAML. Built here, not in the
+        # template, so it is json.dumps output and never hand-quoted; the
+        # template wraps it in single quotes, which compact JSON cannot contain.
+        #
+        # A conflist with `sbr` after macvlan (jgct#244): a macvlan child
+        # cannot reach its own parent, so with net1's subnet route in the main
+        # table the kubelet's probe replies to the node address went out net1
+        # and were lost -- every network probe failed. sbr moves net1's routes,
+        # the lan_routed ones included, into a table used only for source
+        # <address>; the main table keeps the eth0 default alone.
+        for repo in repos:
+            for nad in repo.get('l2_nads', []):
+                nad['config'] = json.dumps({
+                    'cniVersion': '0.3.1', 'name': nad['name'],
+                    'plugins': [
+                        {'type': 'macvlan',
+                         'master': repo['l2_network']['interface'], 'mode': 'bridge',
+                         'ipam': {'type': 'static',
+                                  'addresses': [{'address': nad['address']}],
+                                  'routes': routes}},
+                        {'type': 'sbr'}]}, separators=(',', ':'))
     return repos
 
 
@@ -982,6 +1301,8 @@ class Plugin(makejinja.plugin.Plugin):
                 name: by_instance.get(name, data.get('claudecode_allowed_emails', ''))
                 for name in instances
             }
+        netdev_config(data)
+        ha_mcp_config(data)
         # Backups are encrypted to the cluster's own age public key, taken from
         # .sops.yaml rather than added as another field to fill in. The key is
         # already there, it is already the thing that travels with the cluster

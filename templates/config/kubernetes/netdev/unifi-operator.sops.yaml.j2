@@ -1,0 +1,15 @@
+#% if netdev_writer %#
+---
+# The restricted local admin the netdev-mcp writer signs in as. jg-base's
+# UNIFI_OPERATOR_FILE is this one key: user on the first line, password on the
+# second.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unifi-operator
+  namespace: claudecode
+stringData:
+  operator: |
+    #{ unifi_operator_user | trim }#
+    #{ unifi_operator_password | trim }#
+#% endif %#

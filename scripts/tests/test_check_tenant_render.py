@@ -320,5 +320,20 @@ class TenantRenderGuard(unittest.TestCase):
         self.assertIn("[sample-example] the example operators copy fails cue vet", out)
 
 
+    # 25 --------------------------------------------------------------------
+    def test_25_public_without_its_label_fails(self):
+        self.edit(self.T / "namespaces.yaml.j2", "    jg.tenant-public: granted\n", "")
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("Namespace/im-apps-db labels", out)
+
+    # 26 --------------------------------------------------------------------
+    def test_26_public_label_without_the_grant_fails(self):
+        self.edit(self.T / "namespaces.yaml.j2", "#% if repo.grants.public %#\n", "#% if true %#\n")
+        rc, out = self.run_guard()
+        self.assertEqual(rc, 1, out)
+        self.assertIn("Namespace/acme labels", out)
+
+
 if __name__ == "__main__":
     unittest.main()

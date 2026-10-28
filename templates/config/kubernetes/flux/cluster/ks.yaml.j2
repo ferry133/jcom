@@ -326,13 +326,63 @@ spec:
      'an appliance lands on a LAN nobody has surveyed, so it discovers its address at runtime'
         if _probe_discovers
         else 'this profile declares its LAN addresses in cluster.yaml: an empty path so Flux prunes the probe and the pools it owns, rather than a suspend that would leave the pod recreating them')) %#
+#|   Third position, `netdev` (jgct#249): jg-base's im/netdev overlay, the same
+     HelmRelease plus the netdev-mcp sidecar, chosen when cluster.yaml records
+     a UniFi console. plugin.py refuses a console on an im/disabled cluster, so
+     netdev_enabled implies claudecode_auth0_enabled. Switching between enabled
+     and netdev is an upgrade of one release, not a prune; switching back
+     deletes the snapshot claim (no retain), which for a pile of router
+     secrets is the right default (jg-base netdev-mcp.yaml).
+
+     The position is split over two short lines on purpose: one line starting
+     with a quote and longer than 60 characters is where
+     check-ks-position-labels.py stops reading (it takes that for the `why`
+     prose), and the first draft of this entry was exactly that -- the guard
+     passed without ever seeing 'netdev'. #|
 #% set _ = _enabled.append((
      'claude-code-im',
      './kubernetes/apps/base/claudecode/claude-code/im',
-     'enabled' if claudecode_auth0_enabled else 'disabled',
-     'the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front'
+     'netdev' if netdev_enabled
+        else 'enabled' if claudecode_auth0_enabled else 'disabled',
+     'the default im.<domain> web terminal from jg-base with the netdev-mcp sidecar, because this cluster records a UniFi console'
+        if netdev_enabled
+        else 'the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front'
         if claudecode_auth0_enabled
         else 'claudecode_auth0 is false and the base im hardwires the Auth0 sidecar: an empty path so Flux prunes it, while the basic-auth instance renders from claude_instances')) %#
+#|   multus: Multus + macvlan from jg-base (ferry133/jg-base#187), the CNI that
+     gives a `grants.l2` tenant's pod a second interface on the LAN. On exactly
+     when some app_repos entry holds grants.l2, because the NADs that render
+     with it (tenants/l2-networks.yaml) are a kind only Multus serves.
+
+     Emitted always, in one of two positions, for the reason longhorn-backup
+     gives: dropping the patch would bring back jg-base's `suspend: true`,
+     which leaves the DaemonSet and its 00-multus.conf on every node. The
+     `disabled` path empties the inventory and Flux prunes them; the daemon
+     deletes the CNI config it wrote on SIGTERM (jg-base multus/ks.yaml).
+     Boolean hoisted for check-ks-position-labels.py, as above. #|
+#% set _tenant_l2 = (app_repos | selectattr('grants.l2') | list | length) > 0 %#
+#% set _ = _enabled.append((
+     'multus',
+     './kubernetes/apps/base/kube-system/multus',
+     'enabled' if _tenant_l2 else 'disabled',
+     'an app_repos entry holds grants.l2, so its pods need a second interface on the LAN'
+        if _tenant_l2
+        else 'no tenant holds grants.l2: an empty path so Flux prunes the Multus DaemonSet, rather than a suspend that would leave it on every node')) %#
+#|   generic-device-plugin: exposes the node's serial devices as `devic.es/*`
+     extended resources (ferry133/jg-base#188). On exactly when some app_repos
+     entry holds grants.devices. Two positions for the reason longhorn-backup
+     gives, measured on THIS component: jg-jcc2 2026-10-26, the patch was
+     dropped, the Kustomization went back to suspend:true and the DaemonSet
+     kept running and advertising devic.es/serial-test until it was deleted by
+     hand (jg-base#188 issuecomment-6405530585). #|
+#% set _tenant_devices = (app_repos | selectattr('grants.devices') | list | length) > 0 %#
+#% set _ = _enabled.append((
+     'generic-device-plugin',
+     './kubernetes/apps/base/kube-system/generic-device-plugin',
+     'enabled' if _tenant_devices else 'disabled',
+     'an app_repos entry holds grants.devices, so its pods request devic.es/* resources'
+        if _tenant_devices
+        else 'no tenant holds grants.devices: an empty path so Flux prunes the device plugin, rather than a suspend that would leave it advertising')) %#
 #|   claudecode-db: the explicit-memory PostgreSQL from jg-base (jgct#85), one
      per default im. Base Kustomization is named claudecode-db (NOT -postgres:
      that collides with the extras copy and would fight it on a cluster still
@@ -400,6 +450,38 @@ spec:
             target:
               group: gateway.envoyproxy.io
               kind: EnvoyProxy
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: envoy-gateway
+#% endif %#
+#% if app_repos %#
+#| jg-base's tenant hostname policy (#191) admits a tenant HTTPRoute only under
+   `.<tenant>.<domain>`, and the gateway certificate covers `*.<domain>`: a TLS
+   wildcard matches exactly one label, so every tenant hostname failed TLS
+   (ferry133/jg-base#229, measured rc 60 on jg-jcc2). One extra dnsName per
+   tenant on the same certificate. It covers `<app>.<tenant>.<domain>`, which
+   is the naming the policy and the sample use; a deeper name the policy also
+   admits (`a.b.<tenant>.<domain>`) is still not covered.
+
+   The certificate is jg-base's only one in envoy-gateway, so it is targeted
+   by kind: its name is `${SECRET_DOMAIN/./-}-production` before substitution,
+   which a kustomize target cannot match as a regex. Adding a tenant changes
+   the dnsNames, and cert-manager reissues the certificate. #|
+    # tenants: the gateway certificate also covers *.<tenant>.<domain>
+    - patch: |-
+        - op: add
+          path: /spec/patches/-
+          value:
+            patch: |-
+#% for tenant in app_repos %#
+              - op: add
+                path: /spec/dnsNames/-
+                value: "*.#{ tenant.name }#.${SECRET_DOMAIN}"
+#% endfor %#
+            target:
+              group: cert-manager.io
+              kind: Certificate
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
@@ -619,6 +701,76 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 #% endfor %#
+#| ── netdev-mcp credentials (jgct#249) ───────────────────────────────────────
+   The Secrets jg-base's im/netdev mounts (unifi-reader; with the write release
+   also unifi-operator and im-fac-ticket), in `claudecode`. Rendered only when
+   a console is recorded, so a cluster without one is byte-identical.
+
+   Their own Kustomization and not components/sops: cluster-secrets has no
+   dependsOn and is what every other Kustomization substitutes from, so a
+   Secret in a namespace that does not exist yet would fail THAT apply --
+   cluster-secrets is applied atomically. Here the failure is confined and
+   heals on retry, and dependsOn cluster-apps-base (which applies the
+   claudecode namespace) makes it not happen at all. Same shape as
+   cluster-tenants and its im-apps-write-key.
+
+   Removing the console stops rendering this object; Flux prunes it, and its
+   prune takes the Secrets. Each Secret is optional in jg-base, so their
+   arriving after im started is a missing file to the server (reader
+   credential: missing), not a crash -- but a running pod does not pick up a
+   Secret that first appears later (70 s measured on jg-jcc2 for
+   im-apps-write-key), so the first apply is followed by an im restart. #|
+#% if netdev_enabled %#
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-netdev-secrets
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/netdev
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
+#% endif %#
+#| ── Home Assistant MCP token (jgct#237) ─────────────────────────────────────
+   Secret ha-im-token in `claudecode`, which jg-base's im mounts at
+   /etc/ha-mcp. Its own Kustomization for netdev's reason above, and not
+   cluster-tenants: the default/home-assistant extra pairs with it too, and an
+   extra-only cluster has no tenants. Rendered only when ha_im_token is set.
+
+   A running im does not see a Secret that first appears later, so the first
+   apply is followed by an im restart (on jg-jcc2 im rolled itself 3 s after
+   the Secret, because HA_MCP_URL changed in the same sync; do not rely on it). #|
+#% if ha_mcp_url %#
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-ha-mcp-secret
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/ha-mcp
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
+#% endif %#
 #| ── Standalone app repos (tenants) ──────────────────────────────────────────
    jgct#214 task 3.3, fleet-ops root `standalone-app-repos` design D1/D5.
    Rendered only when app_repos is non-empty: with none declared this file must

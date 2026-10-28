@@ -662,6 +662,46 @@ import (
 	// private key. No *_expires twin: the expiry is in the certificate, and
 	// both the sidecar and the skill's `verify` read it from there.
 	talos_operator_config?: string & !=""
+	// The netdev-mcp sidecar on the base im (jgct#249, ferry133/jg-base#222):
+	// this cluster's UniFi console, read through a reader key and -- only with
+	// the second group -- written through a restricted operator account.
+	// Recording the console moves claude-code-im to jg-base's im/netdev path.
+	// Each group is all-or-nothing and the writer needs the reader; plugin.py
+	// enforces both, since a CUE condition on optional fields is not concrete
+	// (the claudecode_auth0_* note above).
+	//
+	// No format constraint on the credential fields: cue vet echoes the value
+	// it rejects. The URL, repo and probes are not secrets, so they get one.
+	// https only -- the server refuses http and has no switch to turn TLS
+	// verification off.
+	unifi_controller_url?: string & =~"^https://[^/\\s]+"
+	// Defaults to `default` in jg-base; set only for a non-default site.
+	unifi_site?:           string & !=""
+	// PEM: the console's certificate, or the CA that signed it. Not a secret,
+	// but it travels with the key in Secret unifi-reader.
+	unifi_ca_cert?:        string & !=""
+	// The console's Integration API key (read-only).
+	unifi_reader_key?:     string & !=""
+	// The write release. Set only where the root gates allow the operator:
+	// a throwaway cluster first; jcom after a reader-only week and ferry133's nod.
+	unifi_operator_user?:     string & !=""
+	unifi_operator_password?: string & !=""
+	// The private ticket repo the sidecar files a ticket in before each write,
+	// and a token that can only open, comment on and close issues there.
+	im_fac_ticket_repo?:  string & =~"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+	im_fac_ticket_token?: string & !=""
+	// Exactly three outside-reachability targets on three different paths
+	// (root D3: GitHub API, company MinIO, public DNS), each `https://host/path`
+	// or `host:port`. Per cluster, not a template constant: which MinIO answers
+	// depends on the site -- minio.janncot.com does not resolve from FAC1's LAN
+	// (split horizon), the same reason backup_r2_endpoint is per cluster.
+	netdev_outside_probes?: [#NetdevProbe, #NetdevProbe, #NetdevProbe]
+	// The base im's long-lived Home Assistant access token (jgct#237), minted
+	// inside HA for its `im` user by the fleet-ops skill `ha-im-credential`.
+	// Needs an app_repos entry with ha_app (plugin.py), and is meant to be
+	// added only after that HA runs. No format constraint: cue vet echoes the
+	// value it rejects.
+	ha_im_token?: string & !=""
 	// factory provisioning credentials (extras/factory/factory in jg-base).
 	// Only the cluster that hosts factory sets these -- jcom today. Every one is
 	// optional and renders empty elsewhere, which is what the consuming Secret
@@ -731,6 +771,21 @@ import (
 		anthropic_api_key: string & !=""
 	}
 	database_url?: string
+	// linebot-admin's Auth0 login and session cookie (ferry133/linebot#50,
+	// jg-base#189). Required, not optional, when the cluster runs
+	// default/linebot: before jgct#232 these existed only as hand-written
+	// ciphertext in jg-jiahd, and every `task configure` deleted them
+	// silently. A refusal here is the loud version of that deletion.
+	linebot_auth0_domain?: string
+	linebot_auth0_client_id?: string
+	linebot_auth0_client_secret?: string
+	linebot_admin_session_secret?: string
+	if list.Contains(extras, "default/linebot") {
+		linebot_auth0_domain: string & !=""
+		linebot_auth0_client_id: string & !=""
+		linebot_auth0_client_secret: string & !=""
+		linebot_admin_session_secret: string & !=""
+	}
 	synophoto_auth0_domain?: string
 	synophoto_auth0_client_id?: string
 	synophoto_auth0_client_secret?: string
@@ -788,6 +843,12 @@ import (
 	// makejinja (plugin.py reads cluster.yaml, not CUE's value), so absent and
 	// `[]` must, and do, render the same — check-tenant-render.py asserts it.
 	app_repos: *[] | [...#AppRepo]
+	// The customer LAN's other subnets, routed back to from every tenant NAD
+	// through node_default_gateway (jgct#240). No default here and none in
+	// plugin.py: required once any tenant holds grants.l2, and `[]` is how to
+	// say there is no other subnet. Overlap with node_cidr and with each other
+	// is refused in plugin.py, which also has node_cidr's parsed form.
+	lan_routed_cidrs?: [...net.IPCIDR]
 
 	_app_repos_check: {
 		name: list.UniqueItems() & [for r in app_repos {r.name}]
@@ -800,6 +861,7 @@ import (
 		// render a second Secret of the same name and one of the two keys
 		// would silently win.
 		agents: list.MaxItems(1) & [for r in app_repos if r.kind == "agent" {r.name}]
+		ha_apps: list.MaxItems(1) & [for r in app_repos if r.ha_app != _|_ {r.name}]
 	}
 
 	// A tenant is bound to `tenant-admin` in every namespace it declares, and
@@ -810,10 +872,11 @@ import (
 	// every `kind: Namespace` name and every `namespace:`/`targetNamespace:`
 	// value in jg-base main `6600713` and jgct main `791ec14`, plus the three
 	// Kubernetes creates on its own). A namespace added to jg-base later is NOT
-	// covered until it is added here.
+	// covered until it is added here. `home-assistant` added 2026-10-26 for the
+	// jg-extras Home Assistant extra (jg-extras#13), before the extra moves in.
 	#ReservedNamespaces: [
 		"cert-manager", "claudecode", "db", "default", "factory",
-		"flux-system", "freepbx", "ingress-nginx", "kube-node-lease",
+		"flux-system", "freepbx", "home-assistant", "ingress-nginx", "kube-node-lease",
 		"kube-public", "kube-system", "lan-address", "linebot",
 		"longhorn-system", "monitoring", "mqtt", "network", "observability",
 		"omni", "storage",
@@ -847,6 +910,11 @@ import (
 		}
 		namespaces: *[name] | [...#TenantNamespace] & list.MinItems(1)
 		branch?: string & !=""
+		// The label of this tenant's Home Assistant app, when it runs one
+		// (jgct#237): its public name is <ha_app>.<name>.<domain>, and the
+		// base im reaches HA's MCP endpoint there once ha_im_token is set.
+		// At most one tenant (the check below); plugin.py derives the URL.
+		ha_app?: =~"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"
 		// Defaults (4 / 8Gi / 50, design D4) are applied in plugin.py — a CUE
 		// default would never reach the template. Strings, because they go into
 		// a ResourceQuota verbatim and `4` vs `"4"` changes nothing there while
@@ -874,18 +942,43 @@ import (
 		if grants != _|_ if grants.lan_ip != _|_ if grants.lan_ip > 0 {
 			lan_ip_range!: _
 		}
+		// The tenant's LAN addresses for `grants.l2` (jg-base#187): one
+		// macvlan NAD per address on `interface`, the node NIC that carries
+		// node_cidr (Talos: `talosctl get links`). It must exist under that
+		// name on every node a tenant pod can land on. Range checks (inside
+		// node_cidr, clear of the gateway, the nodes, every LoadBalancer pool
+		// and the appliance probe's window) are in plugin.py.
+		l2_network?: {
+			interface: =~"^[A-Za-z0-9_.-]{1,15}$"
+			start:     net.IPv4
+			stop:      net.IPv4
+		}
+		if grants != _|_ if grants.l2 != _|_ if grants.l2 {
+			l2_network!: _
+		}
 	}
 
-	// All off by default. `l2` and `devices` are accepted here and refused in
-	// plugin.py until their platform component ships, so the refusal can name
-	// the component instead of reading as a typo.
+	// All off by default. `devices` maps a device class to how many of it each
+	// of the tenant's namespaces may request (jg-base#188). Which classes exist
+	// is checked in plugin.py against what jg-base's device plugin advertises,
+	// so the refusal can list them. `public` (jgct#250) lets the tenant's
+	// HTTPRoutes attach to envoy-external; without it jg-base admits them on
+	// envoy-internal only (jg-base#235).
 	#Grants: {
 		baseline?:     bool
 		host_network?: bool
 		lan_ip?:       int & >=0
 		l2?:           bool
-		devices?:      [...string]
+		devices?:      {[=~"^[a-z0-9-]+$"]: int & >0}
+		public?:       bool
 	}
+
+	// One netdev_outside_probes target: `https://host[:port]/path` or
+	// `host:port` (jg-base#222, the server's contract). No commas -- jg-base
+	// receives the three joined by commas. A port is digits only: the server
+	// parses it at import, and `https://host:abc/x` crashloops the sidecar
+	// instead of leaving it reader-only (jgct#252).
+	#NetdevProbe: =~"^(https://[^/:\\s,]+(:[0-9]{1,5})?/[^\\s,]*|[A-Za-z0-9.-]+:[0-9]{1,5})$"
 }
 
 #Config

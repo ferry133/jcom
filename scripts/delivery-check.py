@@ -46,6 +46,7 @@ import contextlib
 import datetime
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import pathlib
@@ -1308,6 +1309,102 @@ def check_gateway(args) -> int:
         return PASS
     ok(f"default route {measured} — declared in cluster.yaml and measured on the node")
     return PASS
+
+
+# ------------------------------------------------- l2 return routes
+
+def _client_subnet(node: str) -> tuple[typing.Any, str | None]:
+    """The subnet of THIS machine's interface that routes to `node`.
+
+    Taken from the route to the node, not from the first interface: a laptop
+    with a VPN or a second card has several subnets, and the one that matters
+    is the one its packets to the cluster leave from (fleet-ops-65, jgct#240).
+    """
+    if sys.platform == "darwin":
+        r = run(["route", "-n", "get", node], timeout=REMOTE_TIMEOUT)
+        m = re.search(r"^\s*interface:\s*(\S+)", r.stdout, re.M)
+        if r.returncode != 0 or not m:
+            return None, f"`route -n get {node}` named no interface: {(r.stderr or r.stdout).strip()[:140]}"
+        dev = m.group(1)
+        r = run(["ifconfig", dev])
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+) netmask (0x[0-9a-f]{8})", r.stdout)
+        if r.returncode != 0 or not m:
+            return None, f"`ifconfig {dev}` showed no IPv4 address and netmask"
+        prefix = bin(int(m.group(2), 16)).count("1")
+        addr = m.group(1)
+    else:
+        r = run(["ip", "-o", "route", "get", node], timeout=REMOTE_TIMEOUT)
+        m = re.search(r"\bdev (\S+)", r.stdout)
+        if r.returncode != 0 or not m:
+            return None, f"`ip route get {node}` named no device: {(r.stderr or r.stdout).strip()[:140]}"
+        dev = m.group(1)
+        r = run(["ip", "-o", "-4", "addr", "show", "dev", dev])
+        m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)/(\d+)", r.stdout)
+        if r.returncode != 0 or not m:
+            return None, f"`ip addr show dev {dev}` showed no IPv4 address"
+        addr, prefix = m.group(1), int(m.group(2))
+    return ipaddress.ip_interface(f"{addr}/{prefix}").network, None
+
+
+def check_l2_route(args) -> int:
+    """Is the subnet this machine sits on one the tenant NADs route back to?
+
+    jgct#240: a client on a subnet missing from `lan_routed_cidrs` reaches an
+    l2 tenant's pod and never hears back (the reply leaves through the pod's
+    eth0). Which subnets exist is the router's knowledge, so nothing can check
+    the whole list. This checks the one subnet that is in front of the
+    operator. It is a real LAN client, so the answer is measured, not assumed.
+
+    Three outcomes, and the third is the common one on a bench:
+      PASS     this machine's subnet is listed. The rest of the list is unmeasured.
+      FAIL     it is not listed, and it is not node_cidr: the subnet is named.
+      UNKNOWN  this machine is ON node_cidr. Its subnet needs no route, so it can
+               say nothing about the others. Never a pass.
+    """
+    raw, err = _merged_config(REPO_ROOT)
+    if err:
+        huh(f"cannot read this repo's config: {err}")
+        return UNKNOWN
+    tenants = [t for t in raw.get("app_repos") or []
+               if (t.get("grants") or {}).get("l2")]
+    if not tenants:
+        huh("no app_repos entry holds grants.l2 — there is no NAD to route back from")
+        return UNKNOWN
+    if "lan_routed_cidrs" not in raw:
+        bad("lan_routed_cidrs is not set; `task configure` refuses this config")
+        return FAIL
+    node_net = ipaddress.ip_network(str(raw["node_cidr"]), strict=False)
+    routed = [ipaddress.ip_network(c, strict=False) for c in raw["lan_routed_cidrs"]]
+
+    if args.client_cidr:
+        client = ipaddress.ip_network(args.client_cidr, strict=False)
+        source = "--client-cidr"
+    else:
+        client, err = _client_subnet(args.node)
+        if err:
+            huh(f"cannot tell which subnet this machine reaches {args.node} from: {err}")
+            return UNKNOWN
+        source = f"the interface that routes to {args.node}"
+    print(f"      this machine: {client} (from {source}); node_cidr {node_net}; "
+          f"lan_routed_cidrs {[str(n) for n in routed] or '[]'}")
+
+    if client.overlaps(node_net):
+        huh(f"this machine is on node_cidr ({client}), which the pod reaches "
+            f"without a route")
+        print("      That says nothing about the LAN's other subnets. Run this from")
+        print("      a machine on each of them — the Wi-Fi, the office segment.")
+        return UNKNOWN
+    if any(client.subnet_of(n) for n in routed if n.version == client.version):
+        ok(f"{client} is covered by lan_routed_cidrs — this subnet gets answers")
+        print("      Only this subnet was measured; any other subnet still has to be")
+        print("      listed by someone who knows the router.")
+        return PASS
+    bad(f"{client} is not in lan_routed_cidrs and is not node_cidr")
+    print(f"      A device here reaches the l2 tenants' pods and never hears back.")
+    print(f"      Add \"{client}\" to lan_routed_cidrs and re-run `task configure`.")
+    print("      (If this machine is not on the customer's LAN at all — a VPN, a")
+    print("      remote office — this result does not apply to it.)")
+    return FAIL
 
 
 # ------------------------------------------------- deploy key (6)
@@ -2974,6 +3071,13 @@ def main() -> None:
                          "instead of asking Omni here; read for the taint label only")
     hv.set_defaults(func=check_handover)
 
+    lr = sub.add_parser("l2-route",
+                        help="is this machine's subnet in lan_routed_cidrs (jgct#240)")
+    lr.add_argument("--node", help="a node address; the route to it picks the interface")
+    lr.add_argument("--client-cidr",
+                    help="this machine's subnet, instead of reading it from the route")
+    lr.set_defaults(func=check_l2_route)
+
     t = sub.add_parser("tunnel-cert")
     t.add_argument("--domain", required=True)
     t.add_argument("--cert", default="~/.cloudflared/cert.pem")
@@ -2983,6 +3087,8 @@ def main() -> None:
     args = p.parse_args()
     if args.cmd == "gateway" and not args.node and not args.routes_json:
         p.error("gateway needs --node, or --routes-json to read a capture")
+    if args.cmd == "l2-route" and not args.node and not args.client_cidr:
+        p.error("l2-route needs --node, or --client-cidr")
     # A command that never returned is the third outcome, not a failure of the
     # thing being checked. Without this, RUN_TIMEOUT would turn "the API server
     # never answered" into whichever finding that call site reports for a

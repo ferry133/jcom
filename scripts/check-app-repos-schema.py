@@ -144,6 +144,40 @@ def main() -> int:
     case("lan_ip > 0 without lan_ip_range is refused AND names it",
          with_repos(VENDOR + '    grants: {lan_ip: 1}\n'),
          False, must_name="app_repos.0.lan_ip_range: field is required")
+    # grants.l2 (jg-base#187): the range is required with the grant, the
+    # interface is a Linux name, and lan_routed_cidrs takes CIDRs only.
+    L2 = '    grants: {l2: true}\n    l2_network: {interface: "enp1s0", start: "192.0.2.20", stop: "192.0.2.21"}\n'
+    case("l2 with l2_network and lan_routed_cidrs passes",
+         BASE + 'lan_routed_cidrs: ["198.51.100.0/24"]\napp_repos:\n' + VENDOR + L2, True)
+    case("l2 without l2_network is refused AND names it",
+         with_repos(VENDOR + '    grants: {l2: true}\n'),
+         False, must_name="app_repos.0.l2_network: field is required")
+    case("l2: false without l2_network passes",
+         with_repos(VENDOR + '    grants: {l2: false}\n'), True)
+    case("an interface name with a quote is refused (it lands in CNI JSON)",
+         with_repos(VENDOR + L2.replace('"enp1s0"', '"en\'p1"')),
+         False, must_name="app_repos.0.l2_network.interface: invalid value")
+    case("an interface name longer than 15 characters is refused",
+         with_repos(VENDOR + L2.replace('"enp1s0"', '"enp1s0enp1s0enp1"')),
+         False, must_name="app_repos.0.l2_network.interface: invalid value")
+    case("a non-CIDR lan_routed_cidrs entry is refused",
+         BASE + 'lan_routed_cidrs: ["198.51.100.1"]\napp_repos: []\n',
+         False, must_name="lan_routed_cidrs.0")
+    # grants.public (jgct#250): a bool, nothing required beside it.
+    case("public: true passes",
+         with_repos(VENDOR + '    grants: {public: true}\n'), True)
+    case("public as a string is refused AND names it",
+         with_repos(VENDOR + '    grants: {public: "yes"}\n'),
+         False, must_name="app_repos.0.grants.public")
+    # grants.devices (jg-base#188): class -> positive count.
+    case("devices {serial: 1} passes",
+         with_repos(VENDOR + '    grants: {devices: {serial: 1}}\n'), True)
+    case("devices as the old list shape is refused",
+         with_repos(VENDOR + '    grants: {devices: ["/dev/ttyUSB0"]}\n'),
+         False, must_name="app_repos.0.grants.devices")
+    case("a device count of 0 is refused (leave the class out instead)",
+         with_repos(VENDOR + '    grants: {devices: {serial: 0}}\n'),
+         False, must_name="app_repos.0.grants.devices.serial")
     case("a reserved namespace is refused AND named",
          with_repos(VENDOR + '    namespaces: ["acme", "claudecode"]\n'),
          False, must_name='invalid value "claudecode"')

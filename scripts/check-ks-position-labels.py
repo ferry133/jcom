@@ -86,6 +86,7 @@ CASES = [
     ("enabled", False),
     ("disabled", True),
     ("app", False),      # claudecode-db: always on, and jgct#94's victim
+    ("netdev", False),   # claude-code-im with the netdev-mcp sidecar (jgct#249)
     # A row here is a claim about a directory in ferry133/jg-base, so a
     # position that is retired there loses its row in the same commit that
     # drops it from plugin.py's vocabulary. Removing only one side fails this

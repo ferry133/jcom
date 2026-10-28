@@ -1,0 +1,13 @@
+#% if netdev_writer %#
+---
+# The token the netdev-mcp writer files its tickets with, scoped to
+# im_fac_ticket_repo only (open, comment, close). A file, never env: jg-base's
+# IM_FAC_TICKET_TOKEN_FILE points at this key.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: im-fac-ticket
+  namespace: claudecode
+stringData:
+  token: #{ im_fac_ticket_token | trim | tojson }#
+#% endif %#
