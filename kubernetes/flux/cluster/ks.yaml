@@ -386,6 +386,30 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
+# ── extras/default/home-assistant ─────────────────────────────────────────────────────────
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: extras-home-assistant
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/apps/extras/default/home-assistant
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: jg-extras
+    namespace: flux-system
+  postBuild:
+    substituteFrom:
+      - name: cluster-secrets
+        kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+---
 # ── extras/freepbx/freepbx ─────────────────────────────────────────────────────────
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
