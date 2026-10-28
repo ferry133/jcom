@@ -1,0 +1,8 @@
+---
+# Applied by Kustomization claude-code-ha-mcp-secret (ks.yaml), with the
+# cluster key: Secret ha-im-token, which jg-base's im mounts at /etc/ha-mcp
+# (jgct#237, jg-base#221/#232). Rendered only when ha_im_token is set.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ha-im-token.sops.yaml
