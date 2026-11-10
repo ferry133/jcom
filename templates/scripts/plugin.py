@@ -1456,13 +1456,33 @@ class Plugin(makejinja.plugin.Plugin):
         # lb_pool_blocks because the LAN-IP checks read it. Absent and `[]` stay
         # indistinguishable to the templates, which check-tenant-render.py asserts.
         data['app_repos'] = app_repos(data)
-        # Whether local-path should claim the cluster-default StorageClass.
-        # nfs-subdir claims it whenever it is running, and it only runs on an
-        # NFS cluster, so the two never collide.
-        data.setdefault(
-            'local_path_is_default',
-            'true' if data.get('storage_backend') != 'nfs' else 'false',
-        )
+        # Which class is the cluster default (ferry133 2026-11-01, jgct#257).
+        # A PVC that names no class is app state nobody thought about, and the
+        # rule is that app state lives on the block tier. Until #257,
+        # nfs-subdir claimed the default on an NFS cluster, so "did not choose"
+        # meant "put it on the NAS". sc-nas is now used only where it is named.
+        #
+        #   nfs, db_storage_class longhorn  -> longhorn (the block tier this
+        #                                      cluster chose; it does not pin)
+        #   nfs, anything else              -> local-path
+        #   local-path / replicated         -> local-path, unchanged
+        #
+        # local-path is a base app (EXTRAS_NOW_BASE), so it runs everywhere.
+        # On replicated, Longhorn stays non-default; that is jg-base's comment
+        # and out of #257's scope.
+        #
+        # NAS_IS_DEFAULT and LONGHORN_IS_DEFAULT are rendered only on an NFS
+        # cluster. jg-base reads them as ${NAS_IS_DEFAULT:=true} and
+        # ${LONGHORN_IS_DEFAULT:=false}, so a cluster-secrets rendered before
+        # #257 keeps sc-nas as its one default, and the first re-render
+        # flips all three keys in one commit. That is why jg-base#242 must
+        # reach main BEFORE this template is used. Against an older jg-base
+        # the false would be ignored and two classes would be default.
+        _db = data.get('db_storage_class')
+        _lh_default = data.get('storage_backend') == 'nfs' and _db == 'longhorn'
+        data.setdefault('local_path_is_default', 'false' if _lh_default else 'true')
+        data.setdefault('longhorn_is_default', 'true' if _lh_default else 'false')
+        data.setdefault('nas_is_default', 'false')
         # Whether Longhorn is installed. `storage_backend: "replicated"` implies
         # it, but a NAS-backed cluster can ask for it too — the NAS is right for
         # bulk and wrong for a database, and Longhorn is the one block class that
