@@ -1,0 +1,15 @@
+#% if chamber_secret %#
+---
+#| jgct#263, jg-base#248: Secret `im-chamber` in `claudecode`, keys `token` and
+   `url`. jg-base's im/chamber component mounts it, optional, at /etc/chamber
+   in the chamber-bridge container only (never app: its guard holds that).
+   Values from fleet-ops' `chamber-members mint`. #|
+apiVersion: v1
+kind: Secret
+metadata:
+  name: im-chamber
+  namespace: claudecode
+stringData:
+  token: #{ chamber_token | trim | tojson }#
+  url: #{ chamber_url | trim | tojson }#
+#% endif %#

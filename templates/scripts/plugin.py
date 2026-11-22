@@ -371,6 +371,78 @@ def ha_mcp_config(data: dict) -> None:
                           f"https://ha.{data['cloudflare_domain']}/api/mcp")
 
 
+# im's chamber identity (jgct#263; jg-base#248, sub-change im-chamber-identity;
+# fleet-ops agent-delegation-envelope). ferry133 approved the design on
+# 2026-11-22 ("照這四點做"):
+#
+#   1. one field, chamber_mode: off | observe | deliver, default off. off renders
+#      byte-identically to before this field existed. observe/deliver add
+#      `components: [../chamber]` to claude-code-im and CHAMBER_MODE to
+#      cluster-secrets -- connecting and delivering are two decisions, and a
+#      three-valued field states both.
+#   2. the login credential: chamber_token and chamber_url in cluster.yaml,
+#      rendered into Secret im-chamber (keys token, url) in claudecode and
+#      applied by its own Kustomization, the ha-im-token path. jg-base only
+#      references that Secret by name, optional (its design D2). fleet-ops fills
+#      the two fields from `chamber-members mint`. A mode other than off WITHOUT
+#      them still renders: the bridge idles and says so, and im keeps serving.
+#   3. SESSION_KEEP is NOT tied to this field.
+#   4. im/disabled (claudecode_auth0 false) with a mode other than off is
+#      refused here: jg-base's component copies app's image pin by replacement,
+#      im/disabled has no app, so the build fails and claude-code-im is never
+#      pruned (measured twice, jgct#263). The template also never writes
+#      `components` on the disabled position (check-chamber-render.py).
+#
+# Two refusals beyond the four, both of the "a field that renders nothing and
+# says nothing" kind this file already refuses for netdev: credentials with
+# chamber_mode off, and one of the two credentials without the other. Messages
+# name fields, never values.
+CHAMBER_MODES = ('off', 'observe', 'deliver')
+CHAMBER_CREDENTIALS = ('chamber_token', 'chamber_url')
+
+
+def chamber_config(data: dict) -> None:
+    mode = data.get('chamber_mode') or 'off'
+    if mode not in CHAMBER_MODES:
+        raise ValueError(
+            f"chamber_mode must be one of {', '.join(CHAMBER_MODES)}.")
+    data['chamber_mode'] = mode
+    data['chamber_enabled'] = mode != 'off'
+    creds = [f for f in CHAMBER_CREDENTIALS if data.get(f)]
+    data['chamber_secret'] = False
+    if not data['chamber_enabled']:
+        if creds:
+            raise KeyError(
+                f"cluster.yaml sets {', '.join(creds)} but chamber_mode is off, "
+                "so nothing would mount the Secret. Set chamber_mode to observe "
+                "or deliver, or remove the credential.")
+        return
+    if not data['claudecode_auth0_enabled']:
+        raise KeyError(
+            f"chamber_mode is {mode} but claudecode_auth0 is false, so the base "
+            "im is on its empty im/disabled path: there is no im for the "
+            "chamber bridge to join, and jg-base's chamber component cannot "
+            "build without im's app container (the build fails and the im is "
+            "never pruned). Set chamber_mode to off, or turn the base im on.")
+    if creds and len(creds) != len(CHAMBER_CREDENTIALS):
+        missing = [f for f in CHAMBER_CREDENTIALS if f not in creds]
+        raise KeyError(
+            f"cluster.yaml sets {', '.join(creds)} and is missing "
+            f"{', '.join(missing)}. Secret im-chamber carries both; set both "
+            "(from chamber-members mint), or neither for a bridge that idles.")
+    if not creds:
+        return
+    multi = [f for f in CHAMBER_CREDENTIALS if '\n' in str(data[f]).strip()]
+    if multi:
+        raise ValueError(
+            f"{', '.join(multi)} span more than one line; each is a single value.")
+    if not str(data['chamber_url']).strip().startswith('https://'):
+        raise ValueError(
+            "chamber_url must start with https:// -- it is the chamber "
+            "server's public address.")
+    data['chamber_secret'] = True
+
+
 # Return the Flux / GitHub push token from github-push-token.txt
 def github_push_token(file_path: str = 'github-push-token.txt') -> str:
     try:
@@ -1303,6 +1375,7 @@ class Plugin(makejinja.plugin.Plugin):
             }
         netdev_config(data)
         ha_mcp_config(data)
+        chamber_config(data)
         # Backups are encrypted to the cluster's own age public key, taken from
         # .sops.yaml rather than added as another field to fill in. The key is
         # already there, it is already the thing that travels with the cluster

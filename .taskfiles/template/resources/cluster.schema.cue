@@ -702,6 +702,17 @@ import (
 	// added only after that HA runs. No format constraint: cue vet echoes the
 	// value it rejects.
 	ha_im_token?: string & !=""
+	// im's chamber identity (jgct#263, jg-base#248; ferry133 2026-11-22).
+	// off (the default) renders nothing. observe/deliver connect the base im
+	// to chamber through jg-base's im/chamber component and set CHAMBER_MODE.
+	// plugin.py refuses a mode other than off on an im/disabled cluster.
+	chamber_mode?: "off" | "observe" | "deliver"
+	// The login credential for this cluster's im account, from fleet-ops'
+	// `chamber-members mint`: rendered into Secret im-chamber (keys token,
+	// url) in claudecode. Both or neither (plugin.py). No format constraint
+	// on the token: cue vet echoes the value it rejects.
+	chamber_token?: string & !=""
+	chamber_url?:   string & !=""
 	// factory provisioning credentials (extras/factory/factory in jg-base).
 	// Only the cluster that hosts factory sets these -- jcom today. Every one is
 	// optional and renders empty elsewhere, which is what the consuming Secret

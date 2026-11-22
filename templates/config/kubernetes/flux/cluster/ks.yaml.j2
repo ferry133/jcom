@@ -424,6 +424,12 @@ spec:
         spec:
           suspend: false
           path: #{ basepath }#/#{ position }#
+#%   if name == 'claude-code-im' and chamber_enabled and position != 'disabled' %#
+          # chamber_mode #{ chamber_mode }# (jgct#263): jg-base's im/chamber
+          # component, relative to the path above. Never on im/disabled.
+          components:
+            - ../chamber
+#%   endif %#
       target:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
@@ -763,6 +769,33 @@ spec:
   interval: 1h
   retryInterval: 5m
   path: ./kubernetes/ha-mcp
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
+#% endif %#
+#| ── im's chamber login credential (jgct#263) ─────────────────────────────────
+   Secret im-chamber in `claudecode` (keys token, url), which jg-base's
+   im/chamber component mounts, optional, into the chamber-bridge container
+   only. Its own Kustomization for the ha-im-token reason above. Rendered only
+   with both chamber_token and chamber_url, which plugin.py allows only when
+   chamber_mode is not off. #|
+#% if chamber_secret %#
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-chamber-secret
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/chamber
   prune: true
   sourceRef:
     kind: GitRepository
