@@ -486,6 +486,30 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
+# ── extras/chamber/chamber ─────────────────────────────────────────────────────────
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: extras-chamber
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  deletionPolicy: WaitForTermination
+  interval: 1h
+  path: ./kubernetes/apps/extras/chamber/chamber
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: jg-extras
+    namespace: flux-system
+  postBuild:
+    substituteFrom:
+      - name: cluster-secrets
+        kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+---
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
