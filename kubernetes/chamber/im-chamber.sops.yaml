@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: im-chamber
+  namespace: claudecode
+stringData:
+  token: ENC[AES256_GCM,data:7zksk8CT8DYLtI5Sbz0kfV1+Y42Ymos7rF+P/sfvKVqS2x0LQt2ptmXW,iv:hz0iLGcNEOB7AAqyt0unHmWojpVNlffP0Qfi543c8VE=,tag:o65VBjK2QjupVMmS02D5Hw==,type:str]
+  url: ENC[AES256_GCM,data:eYv5bCWFAS7FbwjqYTZh5JmZSMR7CBhNQ68n,iv:H5hfyf7ufsM0q1NGTYzdqF4g3umui1Xv/eNLnxgBhBI=,tag:pWkbK+uEPj7ddMOgKa9CYg==,type:str]
+sops:
+  age:
+    - recipient: age1eljkxy6r497jeyanvczq9juqkj48dt38kevlenmdcsp8nud49sdqpfejwt
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBOODh1anViYUx2OHdLNXVs
+        V3dnMEpYR1dNNng2UG9vSGpZMVl3YkM2SXg4CjdLWkFVcGV2QzVmMUtxQnJlR3ZE
+        Zmp5Ry9WMVZ3VTU2d1FpTkIvUkk3MnMKLS0tIHhWQTFsVkZCcm51NWd1aGZuK2Mr
+        YTBGdlJyMmh1VDBCT0ZEeWhSRTlBSmsKTdRCj/OFFHgpvvKzsTPFjzGAq1p9Iddw
+        n8zfwOyYrDM3kg+gbe6v1c3bcBBiWiV+VQvvdeWAMcM9hNpRHCNuGA==
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-11-23T15:10:15Z"
+  mac: ENC[AES256_GCM,data:zaOUODWNO4SNuHDRzNsS7bdKd+zTn0HXd/xrpK8kQbPA62OI5WsjHQxt3zUr9LUOyY87DVEDk2FEY0nkma/+mccgcH+KxXfKqttue5p/W7CXn2zvlI7iO+fvofFJyx42jM8XBDXXWNmLwnHk7MPPpVyRNsokcjSmBgJgpOA7Jz0=,iv:gRTHdTD4tEi5FOI6kQ693Jj4z8PnFjwrXNtAYl1pem8=,tag:2WjpdCU4Od1dHRFgQVxhOg==,type:str]
+  encrypted_regex: ^(data|stringData)$
+  mac_only_encrypted: true
+  version: 3.12.1

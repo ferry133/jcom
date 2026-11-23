@@ -1,0 +1,8 @@
+---
+# Applied by Kustomization claude-code-chamber-secret (ks.yaml), with the
+# cluster key: Secret im-chamber, which jg-base's im/chamber component mounts
+# into the chamber-bridge container only (jgct#263, jg-base#248 design D2).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - im-chamber.sops.yaml
