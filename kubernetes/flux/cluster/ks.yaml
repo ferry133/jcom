@@ -551,3 +551,26 @@ spec:
     namespace: flux-system
   dependsOn:
     - name: cluster-apps-base
+---
+# HAND-WRITTEN, not rendered — `task configure` will DROP this block; put it back
+# (ferry133/jg-extras#23, ferry133 2026-11-24: the freepbx package stays private and is
+# pulled with a credential). prune is false on purpose: if this block is dropped, the
+# Secret stays in the cluster instead of being deleted under freepbx. — fleet-ops-02 [e3795b]
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: ghcr-pull-secret
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/ghcr-pull
+  prune: false
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
