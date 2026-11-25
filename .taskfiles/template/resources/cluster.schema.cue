@@ -713,6 +713,13 @@ import (
 	// on the token: cue vet echoes the value it rejects.
 	chamber_token?: string & !=""
 	chamber_url?:   string & !=""
+	// Registry pull credentials (jgct#272; first use jg-extras#23, the private
+	// ghcr.io/ferry133/freepbx). Each entry renders one
+	// kubernetes.io/dockerconfigjson Secret named `name` in every namespace
+	// listed, which a workload names under imagePullSecrets. Absent = nothing
+	// rendered. No format constraint on username or token: cue vet echoes the
+	// value it rejects; plugin.py checks them and names only the entry.
+	registry_pull_secrets?: [...#RegistryPullSecret]
 	// factory provisioning credentials (extras/factory/factory in jg-base).
 	// Only the cluster that hosts factory sets these -- jcom today. Every one is
 	// optional and renders empty elsewhere, which is what the consuming Secret
@@ -993,3 +1000,14 @@ import (
 }
 
 #Config
+
+
+// One registry pull credential (jgct#272). `registry` is the host a pull is
+// addressed to (ghcr.io, registry.example:5000), with no scheme and no path.
+#RegistryPullSecret: {
+	name:     string & =~"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+	registry: string & =~"^[a-z0-9]([-a-z0-9.]*[a-z0-9])?(:[0-9]+)?$"
+	username: string & !=""
+	token:    string & !=""
+	namespaces: [string & =~"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", ...string & =~"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"]
+}

@@ -1,0 +1,15 @@
+#% for s in registry_pull_rendered %#
+---
+#| jgct#272: one `kubernetes.io/dockerconfigjson` Secret per namespace named in
+   cluster.yaml `registry_pull_secrets`. A workload uses it by listing the
+   Secret's name under `imagePullSecrets` (first use: jg-extras' freepbx,
+   jg-extras#23). Applied by Kustomization registry-pull-secrets (ks.yaml). #|
+apiVersion: v1
+kind: Secret
+metadata:
+  name: #{ s.name }#
+  namespace: #{ s.namespace }#
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: #{ s.dockerconfigjson | tojson }#
+#% endfor %#

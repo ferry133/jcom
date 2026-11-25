@@ -371,6 +371,60 @@ def ha_mcp_config(data: dict) -> None:
                           f"https://ha.{data['cloudflare_domain']}/api/mcp")
 
 
+# Registry pull credentials (jgct#272; first use jg-extras#23). cluster.yaml
+# `registry_pull_secrets` is a list of {name, registry, username, token,
+# namespaces}; each renders one kubernetes.io/dockerconfigjson Secret `name`
+# per namespace into kubernetes/registry-pull, applied by Kustomization
+# registry-pull-secrets. The workload side (imagePullSecrets) is not rendered
+# here: it lives with the manifest that needs the image.
+#
+# The JSON is built here, not in the template: `auth` is base64 of
+# `username:token`, and Jinja has no filter for it. Refusals name the entry by
+# its position and `name`, never by username or token.
+def registry_pull_config(data: dict) -> None:
+    import base64
+    import json
+    data['registry_pull_rendered'] = []
+    seen = set()
+    for i, entry in enumerate(data.get('registry_pull_secrets') or []):
+        name = str(entry.get('name') or '')
+        where = f"registry_pull_secrets[{i}] ({name or 'no name'})"
+        registry = str(entry.get('registry') or '')
+        username = str(entry.get('username') or '')
+        token = str(entry.get('token') or '')
+        namespaces = entry.get('namespaces') or []
+        if not (name and registry and username and token and namespaces):
+            raise KeyError(
+                f"{where} needs name, registry, username, token and at least "
+                "one namespace.")
+        if '/' in registry or registry != registry.strip():
+            raise ValueError(
+                f"{where}: registry is the host a pull is addressed to "
+                "(ghcr.io), with no scheme and no path.")
+        if token != token.strip() or len(token.split()) != 1:
+            raise ValueError(
+                f"{where}: token must be one token with no whitespace around "
+                "or inside it.")
+        if username != username.strip() or ':' in username or len(username.split()) != 1:
+            raise ValueError(
+                f"{where}: username must be one word without a colon (the "
+                "registry reads `username:token`).")
+        auth = base64.b64encode(f"{username}:{token}".encode()).decode()
+        config = json.dumps(
+            {"auths": {registry: {"username": username, "password": token,
+                                  "auth": auth}}},
+            separators=(',', ':'))
+        for ns in namespaces:
+            if (name, ns) in seen:
+                raise KeyError(
+                    f"{where}: Secret {name} in namespace {ns} is declared "
+                    "twice. One Secret holds one credential; give the second "
+                    "another name.")
+            seen.add((name, ns))
+            data['registry_pull_rendered'].append(
+                {'name': name, 'namespace': str(ns), 'dockerconfigjson': config})
+
+
 # im's chamber identity (jgct#263; jg-base#248, sub-change im-chamber-identity;
 # fleet-ops agent-delegation-envelope). ferry133 approved the design on
 # 2026-11-22 ("照這四點做"):
@@ -1376,6 +1430,7 @@ class Plugin(makejinja.plugin.Plugin):
         netdev_config(data)
         ha_mcp_config(data)
         chamber_config(data)
+        registry_pull_config(data)
         # Backups are encrypted to the cluster's own age public key, taken from
         # .sops.yaml rather than added as another field to fill in. The key is
         # already there, it is already the thing that travels with the cluster

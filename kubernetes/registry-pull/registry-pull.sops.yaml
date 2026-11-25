@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ghcr-pull
+  namespace: freepbx
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: ENC[AES256_GCM,data:IafmKMRNXooXvW60WtCOqwwiqZsvaAMqoI9zhohpaUn0uahdRe4hztify+DWT84qoBfM79M62HCevQUSmLrhBpuTUExMqlTtJtHhmtUMqaFk5XUatZpTDR/AUa4n9+/38HzhsG42nK1FGYtKhJ3W/ueN3pFsxh+DV3NEKXVhGWS8AwFAwtWmPoVtu43aMfpKXl/cDP+h7/Vi3/WoEKKdq350UeBPzmrDEBs89A8ZxBkL,iv:aphIe4vsaZFE8CV66QP1y6yvBrpfqmwRhjK7ITLsWOU=,tag:D6T4EDHSwGc/KjmBeOvOaw==,type:str]
+sops:
+  age:
+    - recipient: age1eljkxy6r497jeyanvczq9juqkj48dt38kevlenmdcsp8nud49sdqpfejwt
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBZSjZYbkJYSi9jb2M4R3Vv
+        cE1NRHpDcW9qWUFqMDJOZmpJVGNQUG80Y1ZvCmNhRUJIRkhhMlBmTkZxdmVoNkVs
+        a2VIVzAvRzVvS0hUOTlzL2pDeVUreDgKLS0tIDYyRDd2NXpCRjZzanlUOS9lZ1gz
+        S3BzaEt6U1ZQZE80cldoRjBHMGRUQkkKNjNrG2twnxff1yeK8E35ShJDBJ+RzQJ0
+        LpjgrN18f2mQNgEE+uXoxwqqVRrlX9by/owRHdw6+4xetYb/oZGiSg==
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-11-25T15:04:05Z"
+  mac: ENC[AES256_GCM,data:0WoY2W2RJuKCOdUEeMATevIy81DP7mX0FHAn7qbQRK+HrHoJiK3QaVkwEiG9Zk5y0/UUHCutNt4N9CUUR3+YmE2qvOpE6edLTNqRe/5/5jolzMrXeIfXNClJn+fQ1DbeoW9MiMdCYFi5Fa03KQsKIhrl1PJTXmKf/NacF/kquYA=,iv:Jxw30iFUt2St5zWJvYqVvBOPsCaJ3Rt30M1SVzfameI=,tag:qanUHkUZxfrB+LnZ78b+HA==,type:str]
+  encrypted_regex: ^(data|stringData)$
+  mac_only_encrypted: true
+  version: 3.12.1

@@ -388,6 +388,166 @@ def is_set(raw: str) -> bool:
     return not (v.startswith(("<", "${", "$(")) or "CHANGE" in v.upper())
 
 
+# ── registry_pull_secrets (jgct#272, #274) ──────────────────────────────────
+# The one cluster.yaml field whose credential sits INSIDE a list entry.
+# `read_fields` sees the top-level line and nothing under it, and the field's
+# own name does not trip SUSPICIOUS (`secrets`, not `secret`), so before #274 a
+# pull token was absent from this inventory with nothing saying so.
+PULL_FIELD = "registry_pull_secrets"
+PULL_KEYS = {"name", "registry", "username", "token", "namespaces"}
+PULL_ROW = (
+    "The kubelet pulls private images from {registry} with it "
+    "(Secret `{name}` in {namespaces})",
+    "Whatever the token's account can read on that registry — check the "
+    "token, not this row",
+    "Read of every private image the token reaches. A token issued with "
+    "more than a read-packages scope gives whatever that scope allows",
+    "Revoke and reissue at the registry (GitHub: a classic token with the "
+    "single scope `read:packages`), put it in cluster.yaml, `task configure "
+    "--yes`, commit, push; then `escrow-refresh` — cluster.yaml is "
+    "git-ignored, so the escrow bundle is the only copy that leaves the "
+    "laptop. ⚠️ The token expires and the date is not recorded here: after "
+    "expiry or revocation a node that has the image cached keeps running "
+    "it, and a node that does not cannot pull",
+)
+
+
+class CannotRead(Exception):
+    """The list is there and this script could not read it. Never carries the
+    line's text: the line may hold the token."""
+
+
+def _scalar(raw: str) -> str:
+    """One YAML scalar, comment removed. A `#` inside quotes is not a comment
+    — `split("#")` would turn a quoted value that starts with one into blank."""
+    raw = raw.strip()
+    if raw[:1] in ("'", '"'):
+        end = raw.find(raw[0], 1)
+        if end == -1:
+            raise CannotRead("a quote that is not closed")
+        rest = raw[end + 1:].strip()
+        if rest and not rest.startswith("#"):
+            raise CannotRead("text after a closing quote")
+        return raw[:end + 1]
+    return re.split(r"(?:^|\s)#", raw, maxsplit=1)[0].strip()
+
+
+def read_pull_secrets(path: pathlib.Path) -> list[dict[str, object]]:
+    """Entries of `registry_pull_secrets`, as {key: raw scalar} plus
+    `namespaces` as a list. [] when the field is absent or empty.
+
+    This is not a YAML parser and does not pretend to be one. It reads the
+    block form `cluster.sample.yaml` documents; anything else it meets under
+    the field raises CannotRead (exit 2). Skipping what it cannot read would
+    be the defect this file is written against.
+    """
+    lines = path.read_text().splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        m = re.match(rf"^{PULL_FIELD}\s*:(.*)$", line)
+        if m:
+            if start is not None:
+                raise CannotRead(f"`{PULL_FIELD}` is declared twice")
+            start, head = i, _scalar(m.group(1))
+    if start is None:
+        return []
+    if head not in ("", "[]", "~", "null"):
+        raise CannotRead(
+            f"line {start + 1}: `{PULL_FIELD}` is written on one line "
+            "(flow style); this script reads the block form only")
+
+    entries: list[dict[str, object]] = []
+    entry_indent = None   # column of the entries' `- `
+    list_key = None       # key whose block-list items are being collected
+    for n in range(start + 1, len(lines)):
+        line = lines[n]
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "\t" in line[:len(line) - len(line.lstrip())]:
+            raise CannotRead(f"line {n + 1}: a tab in the indentation")
+        indent = len(line) - len(line.lstrip())
+        body = line.strip()
+        # A block list may sit at column 0 under its key, so only a
+        # non-dash line at column 0 ends the field.
+        if indent == 0 and not body.startswith("-"):
+            break
+        if body == "---" or body == "...":
+            break
+        if head == "[]":
+            raise CannotRead(f"line {n + 1}: entries under an explicit `[]`")
+        if body.startswith("-"):
+            if entry_indent is None:
+                entry_indent = indent
+            if indent == entry_indent:
+                entries.append({})
+                list_key = None
+                body = body[1:].strip()
+                if not body:
+                    continue
+            elif indent > entry_indent and list_key is not None:
+                entries[-1][list_key].append(_scalar(body[1:]))
+                continue
+            else:
+                raise CannotRead(f"line {n + 1}: a list item this script cannot place")
+        elif entry_indent is None or indent <= entry_indent:
+            raise CannotRead(f"line {n + 1}: not a list entry")
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:(?:\s+(.*)|)$", body)
+        if not m:
+            raise CannotRead(f"line {n + 1}: not `key: value`")
+        key, val = m.group(1), _scalar(m.group(2) or "")
+        if key in entries[-1]:
+            raise CannotRead(f"line {n + 1}: `{key}` twice in one entry")
+        list_key = None
+        if key == "namespaces":
+            if val == "":
+                entries[-1][key] = []
+                list_key = key
+            elif val.startswith("[") and val.endswith("]"):
+                entries[-1][key] = [
+                    v.strip() for v in val[1:-1].split(",") if v.strip()]
+            else:
+                raise CannotRead(f"line {n + 1}: `namespaces` is not a list")
+        else:
+            if val[:1] in ("|", ">", "[", "{", "&", "*", "!"):
+                raise CannotRead(
+                    f"line {n + 1}: `{key}` is not a plain or quoted value")
+            entries[-1][key] = val
+    return entries
+
+
+def _shown(raw: object) -> str:
+    """A name, registry or namespace as it goes into a markdown table cell.
+    These come from the operator's file, so the cell is kept a cell."""
+    v = str(raw).strip().strip("\"'").strip()
+    return re.sub(r"[|`\r\n]", "?", v) or "?"
+
+
+def pull_rows(entries: list[dict[str, object]]):
+    """(present, blank, unclassified) for the entries. Never returns a
+    username or a token — only labels built from name and registry."""
+    present, blank, unclassified = [], [], []
+    for i, e in enumerate(entries, 1):
+        name = _shown(e["name"]) if is_set(str(e.get("name", ""))) else f"#{i}"
+        registry = _shown(e.get("registry", ""))
+        label = f"{PULL_FIELD}[{name}].token"
+        if is_set(str(e.get("token", ""))):
+            ns = ", ".join(f"`{_shown(x)}`" for x in e.get("namespaces", []))
+            what, scope, blast, rot = PULL_ROW
+            present.append((
+                f"`{label}` (registry `{registry}`)",
+                what.format(registry=f"`{registry}`", name=name,
+                            namespaces=f"namespaces {ns}" if ns else "no namespace"),
+                scope, blast, rot))
+        else:
+            blank.append(f"{label} (registry {registry})")
+        for key in sorted(e):
+            if key in PULL_KEYS:
+                continue
+            if SUSPICIOUS.search(key) and is_set(str(e[key])):
+                unclassified.append(f"{PULL_FIELD}[{name}].{_shown(key)}")
+    return present, blank, unclassified
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -407,6 +567,16 @@ def main() -> int:
     fields = read_fields(cfg)
     name = fields.get("cluster_name", "?").strip("\"'")
 
+    try:
+        pull_present, pull_blank, pull_unclassified = pull_rows(
+            read_pull_secrets(cfg))
+    except CannotRead as why:
+        print(f"?     {cfg}: cannot read `{PULL_FIELD}` — {why}", file=sys.stderr)
+        print("      Reported as could-not-tell, not as 'no pull credential'. "
+              "Each entry under that field holds a token; an inventory printed "
+              "without them would look complete.", file=sys.stderr)
+        return UNKNOWN
+
     present, blank, undeclared, unclassified = [], [], [], []
     for field, row in KNOWN.items():
         if field not in fields:
@@ -420,6 +590,8 @@ def main() -> int:
             continue
         if SUSPICIOUS.search(field) and is_set(fields[field]):
             unclassified.append(field)
+    blank.extend(pull_blank)
+    unclassified.extend(pull_unclassified)
 
     print(f"# Credential inventory — {name}")
     print()
@@ -431,6 +603,8 @@ def main() -> int:
     print("|---|---|---|---|---|")
     for field, (what, scope, blast, rot) in present:
         print(f"| `{field}` | {what} | {scope} | {blast} | {rot} |")
+    for cred, what, scope, blast, rot in pull_present:
+        print(f"| {cred} | {what} | {scope} | {blast} | {rot} |")
     for cred, what, scope, blast, rot in OUT_OF_BAND:
         p = "" if _exists(d, cred) else " *(not in this directory)*"
         print(f"| **{cred}**{p} | {what} | {scope} | {blast} | {rot} |")

@@ -804,6 +804,41 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 #% endif %#
+#| ── Registry pull credentials (jgct#272) ─────────────────────────────────────
+   One dockerconfigjson Secret per namespace named in cluster.yaml
+   `registry_pull_secrets`. Its own Kustomization for the ha-im-token reason
+   above. Rendered only when the list has an entry.
+
+   The Secret lands in a namespace this Kustomization does not create (an
+   extra's, a tenant's). Until that namespace exists the apply fails and is
+   retried every 5 minutes; nothing here orders it after the extra. All
+   entries share this one Kustomization. Whether one missing namespace holds
+   back the Secrets for the others has not been measured (jgct#273); the
+   sample tells the operator to plan as if it does.
+
+   A pod that already failed its pull retries by itself once the Secret
+   exists; a running pod is not restarted. #|
+#% if registry_pull_rendered %#
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: registry-pull-secrets
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/registry-pull
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
+  dependsOn:
+    - name: cluster-apps-base
+#% endif %#
 #| ── Standalone app repos (tenants) ──────────────────────────────────────────
    jgct#214 task 3.3, fleet-ops root `standalone-app-repos` design D1/D5.
    Rendered only when app_repos is non-empty: with none declared this file must

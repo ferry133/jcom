@@ -191,6 +191,28 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: claude-code-im
+    # HAND-WRITTEN, not rendered — `task configure` will DROP this entry; put it back.
+    # SESSION_KEEP=1 keeps im's claude session running with nobody at the ttyd, so a chamber
+    # message that names im is delivered at any hour (ferry133 2026-11-25 console: "6. set it").
+    # No cluster.yaml field renders it yet. A JSON `add` to /spec/patches/- on purpose: a
+    # strategic-merge `patches:` here would replace the list and drop the HelmRelease-strategy
+    # patch (seen on jg-jcc2). — fleet-ops-02 [e3795b]
+    - patch: |-
+        - op: add
+          path: /spec/patches/-
+          value:
+            patch: |-
+              - op: add
+                path: /spec/values/controllers/im/containers/app/env/SESSION_KEEP
+                value: "1"
+            target:
+              group: helm.toolkit.fluxcd.io
+              kind: HelmRelease
+              name: im
+      target:
+        group: kustomize.toolkit.fluxcd.io
+        kind: Kustomization
+        name: claude-code-im
     # disabled (empty path, so anything previously applied is pruned): no tenant holds grants.l2: an empty path so Flux prunes the Multus DaemonSet, rather than a suspend that would leave it on every node
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1
@@ -552,22 +574,18 @@ spec:
   dependsOn:
     - name: cluster-apps-base
 ---
-# HAND-WRITTEN, not rendered — `task configure` will DROP this block; put it back
-# (ferry133/jg-extras#23, ferry133 2026-11-24: the freepbx package stays private and is
-# pulled with a credential). prune is false on purpose: if this block is dropped, the
-# Secret stays in the cluster instead of being deleted under freepbx. — fleet-ops-02 [e3795b]
 apiVersion: kustomize.toolkit.fluxcd.io/v1
 kind: Kustomization
 metadata:
-  name: ghcr-pull-secret
+  name: registry-pull-secrets
   namespace: flux-system
 spec:
   decryption:
     provider: sops
   interval: 1h
   retryInterval: 5m
-  path: ./kubernetes/ghcr-pull
-  prune: false
+  path: ./kubernetes/registry-pull
+  prune: true
   sourceRef:
     kind: GitRepository
     name: flux-system
