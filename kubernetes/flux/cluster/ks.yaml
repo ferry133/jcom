@@ -183,7 +183,7 @@ spec:
         spec:
           suspend: false
           path: ./kubernetes/apps/base/claudecode/claude-code/im/enabled
-          # chamber_mode observe (jgct#263): jg-base's im/chamber
+          # chamber_mode deliver (jgct#263): jg-base's im/chamber
           # component, relative to the path above. Never on im/disabled.
           components:
             - ../chamber
