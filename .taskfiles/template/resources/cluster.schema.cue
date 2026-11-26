@@ -707,6 +707,12 @@ import (
 	// to chamber through jg-base's im/chamber component and set CHAMBER_MODE.
 	// plugin.py refuses a mode other than off on an im/disabled cluster.
 	chamber_mode?: "off" | "observe" | "deliver"
+	// Keep the base im's terminal session running with nobody at the ttyd
+	// (jgct#276; k8scc session-keep). true renders IM_SESSION_KEEP into
+	// cluster-secrets, which jg-base's im reads as SESSION_KEEP. Absent or
+	// false renders nothing. Separate from chamber_mode on purpose (ferry133
+	// 2026-11-22, point 3). plugin.py refuses true on an im/disabled cluster.
+	im_session_keep?: bool
 	// The login credential for this cluster's im account, from fleet-ops'
 	// `chamber-members mint`: rendered into Secret im-chamber (keys token,
 	// url) in claudecode. Both or neither (plugin.py). No format constraint

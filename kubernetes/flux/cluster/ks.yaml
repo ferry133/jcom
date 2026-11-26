@@ -191,28 +191,6 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: claude-code-im
-    # HAND-WRITTEN, not rendered — `task configure` will DROP this entry; put it back.
-    # SESSION_KEEP=1 keeps im's claude session running with nobody at the ttyd, so a chamber
-    # message that names im is delivered at any hour (ferry133 2026-11-25 console: "6. set it").
-    # No cluster.yaml field renders it yet. A JSON `add` to /spec/patches/- on purpose: a
-    # strategic-merge `patches:` here would replace the list and drop the HelmRelease-strategy
-    # patch (seen on jg-jcc2). — fleet-ops-02 [e3795b]
-    - patch: |-
-        - op: add
-          path: /spec/patches/-
-          value:
-            patch: |-
-              - op: add
-                path: /spec/values/controllers/im/containers/app/env/SESSION_KEEP
-                value: "1"
-            target:
-              group: helm.toolkit.fluxcd.io
-              kind: HelmRelease
-              name: im
-      target:
-        group: kustomize.toolkit.fluxcd.io
-        kind: Kustomization
-        name: claude-code-im
     # disabled (empty path, so anything previously applied is pruned): no tenant holds grants.l2: an empty path so Flux prunes the Multus DaemonSet, rather than a suspend that would leave it on every node
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1

@@ -455,6 +455,35 @@ CHAMBER_MODES = ('off', 'observe', 'deliver')
 CHAMBER_CREDENTIALS = ('chamber_token', 'chamber_url')
 
 
+# Keeping im's session up (jgct#276). jcom and jg-jiahd turned SESSION_KEEP on
+# by hand on 2026-11-25 (ferry133: "6. set it") with a patch written into the
+# rendered ks.yaml, which the next `task configure` drops without a word.
+#
+# The field renders ONE key into cluster-secrets and nothing into ks.yaml:
+# jg-base's im reads SESSION_KEEP: "${IM_SESSION_KEEP:=}", the way it reads
+# IM_APPS_REPO and HA_MCP_URL. A patch on claude-code-im would be the other
+# way to say it, and it has a measured trap (fleet-ops-02, jgct#276): written
+# as a strategic merge, `spec.patches` replaces the Kustomization's whole
+# list and the HelmRelease-strategy patch is gone.
+#
+# Not derived from chamber_mode: point 3 of the chamber design above. A
+# cluster in deliver without this still works, for as long as someone has the
+# terminal open.
+#
+# true on im/disabled is refused for this file's usual reason: it would render
+# a key nothing reads, and say nothing.
+def im_session_keep_config(data: dict) -> None:
+    keep = data.get('im_session_keep', False)
+    if not isinstance(keep, bool):
+        raise ValueError("im_session_keep must be true or false.")
+    data['im_session_keep'] = keep
+    if keep and not data['claudecode_auth0_enabled']:
+        raise KeyError(
+            "im_session_keep is true but claudecode_auth0 is false, so the base "
+            "im is on its empty im/disabled path: there is no session to keep. "
+            "Remove im_session_keep, or turn the base im on.")
+
+
 def chamber_config(data: dict) -> None:
     mode = data.get('chamber_mode') or 'off'
     if mode not in CHAMBER_MODES:
@@ -1430,6 +1459,7 @@ class Plugin(makejinja.plugin.Plugin):
         netdev_config(data)
         ha_mcp_config(data)
         chamber_config(data)
+        im_session_keep_config(data)
         registry_pull_config(data)
         # Backups are encrypted to the cluster's own age public key, taken from
         # .sops.yaml rather than added as another field to fill in. The key is
