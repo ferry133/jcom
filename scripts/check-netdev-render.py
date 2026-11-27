@@ -15,7 +15,8 @@ jgct#249, the jgct half of ferry133/jg-base#222. On real makejinja renders:
    `./kubernetes/netdev` with sops decryption after cluster-apps-base; that
    directory's kustomization lists exactly unifi-reader, every listed file is
    rendered and nothing unlisted is; Secret unifi-reader is in `claudecode`
-   with exactly `ca.crt` and `reader-key`, carrying the fixture's values;
+   with exactly `ca.crt` and `reader` (the View Only account: user and
+   password on two lines, jgct#261), carrying the fixture's values;
    cluster-secrets has UNIFI_CONTROLLER_URL and none of the writer's keys.
 3. **Writer** (all five write fields, and a site): the same, plus
    unifi-operator (`operator` = user and password on two lines) and
@@ -57,7 +58,7 @@ IM_BASE = "./kubernetes/apps/base/claudecode/claude-code/im"
 # jg-base im/netdev/netdev-mcp.yaml (checked against jg-base by
 # check-netdev-contract.py).
 SECRETS = {
-    "unifi-reader": ["ca.crt", "reader-key"],
+    "unifi-reader": ["ca.crt", "reader"],
     "unifi-operator": ["operator"],
     "im-fac-ticket": ["token"],
 }
@@ -73,7 +74,8 @@ CA = ("-----BEGIN CERTIFICATE-----\nplaceholder-unifi-ca\n"
 READER = dict(
     unifi_controller_url="https://192.0.2.1",
     unifi_ca_cert=CA,
-    unifi_reader_key="placeholder-unifi-reader",
+    unifi_reader_user="placeholder-rd-user",
+    unifi_reader_password="placeholder-rd-pass",
 )
 PROBES = ["https://api.github.com/zen",
           "https://minio.example.invalid/minio/health/live",
@@ -87,7 +89,7 @@ WRITER = dict(
     im_fac_ticket_token="placeholder-fac-token",
     netdev_outside_probes=PROBES,
 )
-CREDENTIALS = ("placeholder-unifi-reader", "placeholder-op-user",
+CREDENTIALS = ("placeholder-rd-user", "placeholder-rd-pass", "placeholder-op-user",
                "placeholder-op-pass", "placeholder-fac-token")
 
 
@@ -98,13 +100,14 @@ def drop(d: dict, *keys: str) -> dict:
 # (case, cluster.yaml additions over BASE, token the refusal must contain)
 REFUSALS = [
     ("writer-without-reader", drop(WRITER, *READER), "no UniFi console"),
-    ("reader-missing-key", drop(READER, "unifi_reader_key"), "is missing unifi_reader_key"),
+    ("reader-missing-password", drop(READER, "unifi_reader_password"),
+     "is missing unifi_reader_password"),
     ("writer-half", drop(WRITER, "im_fac_ticket_token"), "is missing im_fac_ticket_token"),
     ("auth0-off", dict(READER, claudecode_auth0=False,
                        ttyd_credential="ops:placeholder-not-a-real-credential",
                        claude_instances=[]), "claudecode_auth0 is"),
     ("ca-not-pem", dict(READER, unifi_ca_cert="placeholder-not-pem"), "BEGIN CERTIFICATE"),
-    ("key-two-lines", dict(READER, unifi_reader_key="placeholder-unifi-reader\nx"),
+    ("reader-password-two-lines", dict(READER, unifi_reader_password="placeholder-rd-pass\nx"),
      "span more than one line"),
     ("probes-repeat", dict(WRITER, netdev_outside_probes=[PROBES[0], PROBES[0], PROBES[2]]),
      "exactly three DIFFERENT"),
@@ -112,6 +115,9 @@ REFUSALS = [
 # (case, additions, expected cue vet verdict: True = accepted)
 VETS = [
     ("vet-reader", READER, True),
+    # jgct#261: the API-key field is gone. The schema is closed, so a
+    # cluster.yaml that still carries it is refused, by name, before render.
+    ("vet-retired-reader-key", dict(READER, unifi_reader_key="placeholder-rd-key"), False),
     ("vet-writer", WRITER, True),
     ("vet-http", dict(READER, unifi_controller_url="http://192.0.2.1"), False),
     ("vet-two-probes", dict(WRITER, netdev_outside_probes=PROBES[:2]), False),
@@ -193,7 +199,8 @@ def check_present(name: str, files: dict[str, bytes], writer: bool, fixture: dic
                    " -- an unlisted file is never applied, a listed missing one fails the build")
     values = {
         ("unifi-reader", "ca.crt"): fixture["unifi_ca_cert"],
-        ("unifi-reader", "reader-key"): fixture["unifi_reader_key"],
+        ("unifi-reader", "reader"):
+            f"{fixture['unifi_reader_user']}\n{fixture['unifi_reader_password']}\n",
         ("unifi-operator", "operator"):
             f"{fixture.get('unifi_operator_user')}\n{fixture.get('unifi_operator_password')}\n",
         ("im-fac-ticket", "token"): fixture.get("im_fac_ticket_token"),

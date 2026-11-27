@@ -168,11 +168,11 @@ KNOWN: dict[str, tuple[str, str, str, str]] = {
     ),
     # ── netdev-mcp (jgct#249, jg-base#222): rendered into Secrets under
     # kubernetes/netdev/, mounted on the sidecar only.
-    "unifi_reader_key": (
-        "The netdev-mcp sidecar's read-only UniFi Integration API key (Secret unifi-reader)",
-        "This site's UniFi console, read-only",
-        "The site's network inventory: devices, clients and their addresses, networks and Wi-Fi settings as the Integration API exposes them",
-        "Revoke and reissue in the console's Integration settings, put it in cluster.yaml, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop",
+    "unifi_reader_password": (
+        "With unifi_reader_user: the View Only local account the netdev-mcp reader signs in as (Secret unifi-reader; jgct#261 — not an API key, the console has no read-only one)",
+        "This site's UniFi console, at the View Only role (Network: View)",
+        "The site's network inventory: devices, clients and their addresses, networks and Wi-Fi settings as that account sees them. No writes — measured on FAC1, the View Only cookie's PUT is refused 403",
+        "Change the password of that local account on the console (or delete and recreate it), put it in cluster.yaml, `task configure --yes`, commit, push, restart `im`; then `escrow-refresh` — cluster.yaml is git-ignored, so the escrow bundle is the only copy that leaves the laptop",
     ),
     "unifi_operator_password": (
         "With unifi_operator_user: the restricted local admin the netdev-mcp writer signs in as (Secret unifi-operator)",
@@ -360,7 +360,7 @@ NOT_CREDENTIALS = {
     "daily_check_notify_email_from", "backup_r2_endpoint", "backup_r2_bucket",
     "backup_retain_days", "claudecode_allowed_emails", "claudecode_auth0",
     "claudecode_oauth2_cookie_secret_source",
-    # The console's certificate or CA (PEM): public, travels with the reader key.
+    # The console's certificate or CA (PEM): public, travels with the reader's login.
     "unifi_ca_cert",
 }
 

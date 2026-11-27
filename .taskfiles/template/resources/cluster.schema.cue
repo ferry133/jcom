@@ -663,7 +663,7 @@ import (
 	// both the sidecar and the skill's `verify` read it from there.
 	talos_operator_config?: string & !=""
 	// The netdev-mcp sidecar on the base im (jgct#249, ferry133/jg-base#222):
-	// this cluster's UniFi console, read through a reader key and -- only with
+	// this cluster's UniFi console, read as a View Only local account and -- only with
 	// the second group -- written through a restricted operator account.
 	// Recording the console moves claude-code-im to jg-base's im/netdev path.
 	// Each group is all-or-nothing and the writer needs the reader; plugin.py
@@ -678,10 +678,17 @@ import (
 	// Defaults to `default` in jg-base; set only for a non-default site.
 	unifi_site?:           string & !=""
 	// PEM: the console's certificate, or the CA that signed it. Not a secret,
-	// but it travels with the key in Secret unifi-reader.
+	// but it travels with the reader's login in Secret unifi-reader.
 	unifi_ca_cert?:        string & !=""
-	// The console's Integration API key (read-only).
-	unifi_reader_key?:     string & !=""
+	// The reader signs in as a View Only LOCAL account on the console, not
+	// with an API key (jgct#261, ferry133 2026-11-13). Measured on FAC1: an
+	// API key is created by the account that owns it, the View Only account
+	// cannot create one, and the owner-made "reader" key could write. So the
+	// console has no read-only key; the read-only credential is the account.
+	// unifi_reader_key is gone: this schema is closed, so a cluster.yaml that
+	// still sets it fails here, by name.
+	unifi_reader_user?:     string & !=""
+	unifi_reader_password?: string & !=""
 	// The write release. Set only where the root gates allow the operator:
 	// a throwaway cluster first; jcom after a reader-only week and ferry133's nod.
 	unifi_operator_user?:     string & !=""

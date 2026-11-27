@@ -231,12 +231,13 @@ def extras_deploy_key(file_path: str = 'jg-extras.deploy.key') -> str:
 # ferry133/jg-base#222): im plus the netdev-mcp sidecar, which reads this
 # cluster's UniFi console. jg-base's contract is in
 # kubernetes/apps/base/claudecode/claude-code/im/netdev/netdev-mcp.yaml: three
-# optional Secrets in `claudecode` (unifi-reader: ca.crt + reader-key;
+# optional Secrets in `claudecode` (unifi-reader: ca.crt + reader, two lines;
 # unifi-operator: operator, two lines; im-fac-ticket: token) and four
 # cluster-secrets values.
 #
 # Two groups, and each is all-or-nothing:
-#   reader  unifi_controller_url + unifi_ca_cert + unifi_reader_key
+#   reader  unifi_controller_url + unifi_ca_cert + unifi_reader_user +
+#           unifi_reader_password (a View Only local account, jgct#261)
 #   writer  unifi_operator_user + unifi_operator_password +
 #           im_fac_ticket_repo + im_fac_ticket_token + netdev_outside_probes
 # The server registers write tools only when every writer input is usable, so
@@ -248,7 +249,8 @@ def extras_deploy_key(file_path: str = 'jg-extras.deploy.key') -> str:
 #
 # The recorded console is what selects the path: no separate on/off switch,
 # because two fields for one fact diverge (base_repo_dir's reasoning).
-NETDEV_READER = ('unifi_controller_url', 'unifi_ca_cert', 'unifi_reader_key')
+NETDEV_READER = ('unifi_controller_url', 'unifi_ca_cert', 'unifi_reader_user',
+                 'unifi_reader_password')
 NETDEV_WRITER = ('unifi_operator_user', 'unifi_operator_password',
                  'im_fac_ticket_repo', 'im_fac_ticket_token',
                  'netdev_outside_probes')
@@ -273,9 +275,10 @@ def netdev_config(data: dict) -> None:
         missing = [f for f in NETDEV_READER if f not in reader]
         raise KeyError(
             f"cluster.yaml records a UniFi console but is missing "
-            f"{', '.join(missing)}. All three are needed for the netdev-mcp "
+            f"{', '.join(missing)}. All four are needed for the netdev-mcp "
             "reader: the URL, the console's certificate (or its CA) as PEM, "
-            "and the Integration API key.")
+            "and the user and password of a View Only local account on the "
+            "console (not an API key: the console has no read-only one).")
     if writer and len(writer) != len(NETDEV_WRITER):
         missing = [f for f in NETDEV_WRITER if f not in writer]
         raise KeyError(
@@ -298,7 +301,7 @@ def netdev_config(data: dict) -> None:
         raise ValueError(
             "unifi_ca_cert has no '-----BEGIN CERTIFICATE-----' line: it must "
             "be the console's certificate or its CA, as PEM.")
-    single = ['unifi_reader_key']
+    single = ['unifi_reader_user', 'unifi_reader_password']
     if writer:
         single += ['unifi_operator_user', 'unifi_operator_password',
                    'im_fac_ticket_token']
@@ -306,8 +309,9 @@ def netdev_config(data: dict) -> None:
     if multi:
         raise ValueError(
             f"{', '.join(multi)} span more than one line; each is a single "
-            "value. (unifi-operator's file is user and password on two lines, "
-            "and the template builds it from the two fields.)")
+            "value. (unifi-reader's and unifi-operator's files are user and "
+            "password on two lines, and the template builds each from its two "
+            "fields.)")
     if writer:
         probes = data['netdev_outside_probes']
         if len(probes) != 3 or len(set(probes)) != 3:
