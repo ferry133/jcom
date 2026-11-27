@@ -1,0 +1,31 @@
+# The netdev-mcp reader's credentials. jg-base mounts the whole Secret, not a
+# subPath, at /etc/netdev-mcp/reader on that container only: ca.crt is what
+# TLS to the console is verified against (there is no switch to skip it);
+# reader is the View Only local account the server signs in as -- jg-base's
+# UNIFI_READER_FILE, user on the first line, password on the second, the same
+# shape as unifi-operator. Not an API key: the console has none that is
+# read-only (jgct#261).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unifi-reader
+  namespace: claudecode
+stringData:
+  ca.crt: ENC[AES256_GCM,data:AYXonJN2yO3Yf3SJAoXOPh57f8wspqcKadjdgSbjYEfs2+ccQwrZq4vR3uCLartx0XyOCT1hu2nUPOIR03jzfOHIvmd2z5ItUE1lVwhtG9xPCN6nIv+kaEr/5H6yb0ueW1OUuYqmXoQVOoab2LqYko76vtZsfpHXJK15qmK7nw8xzwW85/9PAHw03eYLssD6hct+BOolAOshlI3vRi5cIDy5brZqocAAG2WYzEWsF4E5Of82q/fEGTXneyEee+Go0M2J7N4utmi/SQI/aQciUb8RnAq0tNDZL3VLgamRTyjFUh321Td4+19llWcnsGL1Hwysm3DxPYlQ9ixf02L9HyP/9wgxLJMjPZPVM6U1XhumllAZ2kx91Wtcu+/yVTKG+fkXEQoY0VhgxhEwSgWuiRgalPSMQDS830DUkaaWIjM9oWDbuWfAnhYe0S0Jj9+jyAaBsdVqxev9Zc7pPhD+tQRFNRefffgUlzM2igrQcbMMOalTTrhgFdiZ8EQzOImINo+3BVhvYVUDORiVUy3rwaIEF/g1q9aQkK2SPDML5s7Zr1utO0ggxPTzr2gukYQscUs0lJgGU9DXxXXdVItHIpUvcI+BWM4PwK5t7ZrgZH3CvFpfAWuZAjjvvogIoSzBMwGQ9225x885TV4ToE63FjGd7oNYkM+uOqVjoaOGZHPu3+t2bxDrfS/DNtwQiTMH7I76pgddZghFmBumN6SZy/nJhHw9c8oqv8/woinDugumRJwHky9n2RjTV4FIQEgpvhtm92teectjwxdBKOiIWrss8aOy9L5VvjnipKqL4PQj6QOo3SkxMfbO9hNZsxrcz6bwviSAnJ27XbxuK3n2gLcTZh5CE2SAng+/nui8nNUcGkD4VvsRZFW70aqjZN0IjU+7GL2Ye8zsqlbRKgou5FL2PXPUlfH/9O8s1ewds3h940VVRNG36VqG5lLUJi5TVqx2dZIHVzaWum2cp1zptT24pc+ypm/BImBHhZVkN2o4GF7V1rpruy+Dm2lvdjKbD4y5tSvF9oyd6eZo54H4EdF0AlL1cJMk/eiA5q2yS4EjBltGKjeiErfAzM7qUXxY+Le/sZ7Bpkm8bQaediaaXNFbUajliBz2/syB4pf7hi80cVFMM9yx1aGSPo4ZgEHVnv+utJIoXAazXr9141lZbixNgzxVGmj7ipUYV/wyuKbtzqfwO22qtDAT0u7+KI+33htibCFK8pCfMIb4ORNUWKVY3zUpU+v1ZD89kJlroAWkvqKpAuWt/mdPEBSsgFzQD3SwB1qa6VBlV5Pz4v/lba3dZukWUftkp2oR9kei+tGmh3kLExfpquCSKc3r+Q8x0QvSIw1FRVweimGC6hJEEg8VR848oqDKdWw5ik2YcSVzBd7Vzrjky2aBUCcv7PuA0w64FyO95iqn4w4ahY4D8U2YrikJvQ0jl6l5tIYKv+zcTPPCv+M8nJt1vMYwKSJAj5LTfSAIr08aXvuyzCg7KZmnezJYDUi0Y0J72Za/Ss7uPL/MljLBJcUdRsyJ+8HmZpZZwfNLIY9NiATFdXX0bYJ8Ki8=,iv:d336ZTenwM9aPBbPk1zHKSoe2pgIXTQnsb6jMTwE6JI=,tag:QHpJAsATy0aolibIlkJXAA==,type:str]
+  reader: ENC[AES256_GCM,data:nFhp+LhK9Vdp+1j9UYIcwXo9D+8zPJIkWa/BOQ==,iv:FVl6DCn1VQBTqNKpDszmdI2f2nN22gj+Euekv30ctlE=,tag:6FASzy+8FawBS7/DtzR+6A==,type:str]
+sops:
+  age:
+    - recipient: age1eljkxy6r497jeyanvczq9juqkj48dt38kevlenmdcsp8nud49sdqpfejwt
+      enc: |
+        -----BEGIN AGE ENCRYPTED FILE-----
+        YWdlLWVuY3J5cHRpb24ub3JnL3YxCi0+IFgyNTUxOSBUem9JMjZocTQ1c1RZTUgw
+        WHpRb2VudWhHcm55UllHUVAwQ3JxeG5vNnhZClVGenFNY2ZRdCtZNnZqbmdBdERB
+        NkNZWVRaQXd3MnBxTmxFS1luSWVkbGsKLS0tIHN6TjlWbVlFdENtQzh5TUhMMlpM
+        NmIrRi9Yc2lvK3p2NlRXU05yNDFXb0EKLbrt/0M0jUMGpVhA5SWCCdR2H7tLmC3W
+        zD4ZCXgONw9v/FatxcEDiFn6NkD9YV+t4IUcU74MgCOnURCeGmUwTA==
+        -----END AGE ENCRYPTED FILE-----
+  lastmodified: "2026-11-27T16:00:07Z"
+  mac: ENC[AES256_GCM,data:X6bXg5nUq4gPvvVnDHOsBmrn8mjj5/5FbjFNP+7lW2FTFg67qvq3afG3DwsXFlf+UcE+OZaLRA1I4r3n50rV3fhr/WdstVJ7GJ7v7H+f+Zu/yRD9Hle9HnLQokFfwRuqXPnu/+Ugv6KniSxGWdcRq233et9TjUnIVR3IkXgV+mU=,iv:fND4mVWk3PXzxMgab4X9rcrMEJlS8iVjqvImqkHDADw=,tag:fHUr9rqgVZJgRrWXCL1aZQ==,type:str]
+  encrypted_regex: ^(data|stringData)$
+  mac_only_encrypted: true
+  version: 3.12.1

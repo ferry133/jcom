@@ -173,7 +173,7 @@ spec:
         group: kustomize.toolkit.fluxcd.io
         kind: Kustomization
         name: lan-address-probe
-    # enabled: the default im.<domain> web terminal from jg-base, gated on this cluster accepting the Auth0 OIDC front
+    # enabled: the default im.<domain> web terminal from jg-base with the netdev-mcp sidecar, because this cluster records a UniFi console
     - patch: |-
         apiVersion: kustomize.toolkit.fluxcd.io/v1
         kind: Kustomization
@@ -182,7 +182,7 @@ spec:
           namespace: flux-system
         spec:
           suspend: false
-          path: ./kubernetes/apps/base/claudecode/claude-code/im/enabled
+          path: ./kubernetes/apps/base/claudecode/claude-code/im/netdev
           # chamber_mode deliver (jgct#263): jg-base's im/chamber
           # component, relative to the path above. Never on im/disabled.
           components:
@@ -511,6 +511,25 @@ spec:
     substituteFrom:
       - name: cluster-secrets
         kind: Secret
+  dependsOn:
+    - name: cluster-apps-base
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: claude-code-netdev-secrets
+  namespace: flux-system
+spec:
+  decryption:
+    provider: sops
+  interval: 1h
+  retryInterval: 5m
+  path: ./kubernetes/netdev
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+    namespace: flux-system
   dependsOn:
     - name: cluster-apps-base
 ---
